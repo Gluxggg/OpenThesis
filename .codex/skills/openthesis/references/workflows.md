@@ -50,14 +50,17 @@ node .codex/skills/openthesis/scripts/openthesis.mjs import manuscript.md \
 
 Keep the JSON beside the Markdown when it contains relative image paths. If it must move, update figure paths relative to the JSON file.
 
-## Parse a Word template
+## Parse a DOCX or PDF template
 
 ```bash
 node .codex/skills/openthesis/scripts/openthesis.mjs parse university.docx \
   --type thesis --org "University Name"
+
+node .codex/skills/openthesis/scripts/openthesis.mjs parse format-guide.pdf \
+  --type journal --org "Journal Name"
 ```
 
-This writes `university.template.json` beside the source template.
+This writes a `.template.json` file beside the source. DOCX preserves named Word styles; text-based PDF parsing infers reusable styles from visible text geometry. Review PDF parser warnings. A scanned PDF must be OCRed first.
 
 ## Build structured JSON
 
@@ -97,6 +100,6 @@ Common failures:
 - `Invalid document content — N problems`: `build` validates before rendering. Each line names a path such as `sections[0].content[2].headers`; fix all of them, then rebuild.
 - `Template: …` warnings: the parsed template is missing formatting or defines more sections than can be rendered. Re-parse the source `.docx`, or accept the built-in defaults.
 - Missing figure: make the path relative to the Markdown/JSON source file, or use an absolute path.
-- Wrong formatting: verify `-t` points to a template JSON parsed from the intended DOCX file, and check the `thesis parse` warning list.
+- Wrong formatting: verify `-t` points to a template JSON parsed from the intended DOCX or PDF file, and check the `thesis parse` warning list.
 - Lists: items are emitted as real Word numbering, so the marker comes from Word. Two lists separated by any other block restart at 1.
 - Advanced formula renders literally: native OMML covers fractions, roots, scripts, n-ary operators, functions, limits, accents, scalable delimiters, binomials, and common matrix/cases/aligned environments. Simplify user-defined macros, array column specifications, and uncommon AMS environments before building.

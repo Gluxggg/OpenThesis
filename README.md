@@ -23,7 +23,7 @@
 
 ---
 
-**One engine, infinite templates.** Parse any `.docx` template. Write in Markdown or structured JSON. Export submission-ready DOCX.
+**One engine, infinite templates.** Parse `.docx` templates or infer reusable styles from text-based `.pdf` references. Write in Markdown or structured JSON. Export submission-ready DOCX.
 
 For **university theses**, **journal articles**, and **government official documents** — with correct fonts, margins, headers, page numbers, table formatting, and equation rendering.
 
@@ -34,7 +34,7 @@ For **university theses**, **journal articles**, and **government official docum
 | Existing tools                          | OpenThesis                                                              |
 | --------------------------------------- | ----------------------------------------------------------------------- |
 | Template **filling** (docxtemplater)    | Template **understanding** — knows what a heading, abstract, or 发文字号 IS |
-| One template format hardcoded           | Parse **any** `.docx` template → JSON style DSL                         |
+| One template format hardcoded           | Parse `.docx` or infer text-PDF layouts → JSON style DSL                 |
 | Formatting parameters scattered in code | All formatting driven by the parsed template                            |
 | Markdown → LaTeX (pandoc/ThesisForge)   | Markdown or structured JSON → editable **DOCX**                         |
 | Single document type                    | **Thesis + Journal + 公文** — one engine, three domains                   |
@@ -45,7 +45,7 @@ For **university theses**, **journal articles**, and **government official docum
 graph TD
     %% Nodes and Groups
     subgraph Inputs ["1. Input Sources"]
-        A["📄 Word Template (.docx) <br> (e.g. Tsinghua Thesis, Elsevier, GB/T 9704)"]
+        A["📄 Template Reference (.docx or text PDF) <br> (e.g. university, journal, GB/T 9704)"]
         B["✍️ Markdown or JSON Content <br> (thesis, journal, official document)"]
     end
 
@@ -76,24 +76,26 @@ graph TD
     class F outputStyle;
 ```
 
-## PDF templates and current scope
+## PDF template support
 
-Many universities, journals, and government agencies publish their formatting guides or sample documents only as PDF. OpenThesis can use those PDFs as **visual specifications**, but the current parser does **not** parse PDF files directly.
+Many universities, journals, and government agencies publish their formatting guides or sample documents only as PDF. OpenThesis can now parse a **text-based PDF** and infer the reusable OpenThesis template that drives DOCX output.
 
 | Input | Current support | Notes |
 | --- | --- | --- |
 | `.docx` template | ✅ Native | Extracts named styles, inheritance, page geometry, headers, footers, and columns |
-| Text PDF | ⚠️ Reference only | PDF stores positioned page content rather than reusable Word style definitions |
-| Scanned PDF | ⚠️ Reference only | OCR and layout reconstruction are not built into OpenThesis |
+| Text-based `.pdf` | ✅ Heuristic inference | Infers page size, margins, columns, fonts, sizes, alignment, line spacing, and semantic roles |
+| Scanned `.pdf` | ⚠️ OCR required | Returns a clear error when the PDF contains no extractable text |
 | Markdown / OpenThesis JSON | ✅ Native | Used as document content and rendered to editable DOCX |
 
-If the official source is PDF-only:
+```bash
+node packages/cli/dist/index.js parse format-guide.pdf \
+  --type thesis --org "XX University"
+# → format-guide.template.json
+```
 
-1. Prefer an official editable `.docx` template when one is available.
-2. Otherwise convert or OCR the PDF to DOCX with an external tool, then clean its Word styles and page settings.
-3. Run `thesis parse converted-template.docx`, build the document, and compare the result against the original PDF.
+PDF stores positioned glyphs instead of named Word styles. OpenThesis therefore groups text into lines, clusters typography, identifies the dominant body style, and heuristically maps larger or centered styles to headings and titles. The generated JSON includes warnings because PDF inference cannot recover information that is not encoded in the file.
 
-PDF conversion can fragment paragraphs, substitute fonts, and flatten headers or tables, so a converted file should not be treated as an automatically faithful template. Native PDF layout understanding and semantic reconstruction are planned for V4.
+Review the generated template before production use. Exact table borders, drawing objects, headers/footers, footnotes, and scanned pages remain outside this first PDF slice; advanced reconstruction and built-in OCR remain planned for V4.
 
 ## Quick Start
 
@@ -106,8 +108,9 @@ pnpm install && pnpm build
 # 2. Build the included Markdown example directly
 node packages/cli/dist/index.js build examples/sample-thesis.md -o output.docx
 
-# 3. Or parse your university/favorite journal's .docx template
+# 3. Parse a DOCX template or a text-based PDF reference
 node packages/cli/dist/index.js parse 你的学校模板.docx --type thesis --org "XX大学"
+node packages/cli/dist/index.js parse 期刊格式说明.pdf --type journal --org "Journal Name"
 
 # 4. Create sample structured content
 node packages/cli/dist/index.js init --type thesis
@@ -124,7 +127,7 @@ node packages/cli/dist/index.js import manuscript.md --type thesis -o manuscript
 
 ## Agent Skill
 
-OpenThesis ships as a standard repository skill at `.codex/skills/openthesis`. Agents can invoke it explicitly with `$openthesis`, or discover it automatically for thesis, journal, official-document, Word-template, and Markdown-to-DOCX tasks.
+OpenThesis ships as a standard repository skill at `.codex/skills/openthesis`. Agents can invoke it explicitly with `$openthesis`, or discover it automatically for thesis, journal, official-document, Word/PDF-template, and Markdown-to-DOCX tasks.
 
 The skill includes a stable wrapper, focused workflow references, the Markdown contract, the content-schema quick reference, and UI metadata:
 
@@ -166,7 +169,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 | ----------------------------- | --- | ---------------------------------------------------------- |
 | `@openthesis/document-schema` | —   | Domain models for thesis, journal, official documents      |
 | `@openthesis/markdown-parser` | —   | Markdown + front matter → typed document JSON              |
-| `@openthesis/template-parser` | —   | Parse `.docx` → JSON style DSL with inheritance resolution |
+| `@openthesis/template-parser` | —   | Parse DOCX or infer text-PDF layout → JSON style DSL       |
 | `@openthesis/docx-renderer`   | —   | Template-driven DOCX renderer (dolanmiu/docx)              |
 | `@openthesis/equation-engine` | —   | LaTeX math AST + Unicode/Pandoc compatibility fallbacks    |
 | `@openthesis/cli`             | —   | CLI: `thesis parse`, `import`, `init`, and `build`          |
@@ -174,6 +177,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 ## Features
 
 - ✅ **Style inheritance resolution** — DOCX `basedOn` chains are recursively resolved
+- ✅ **Text-based PDF templates** — Typography and page geometry are inferred into the same reusable style DSL (heuristic; see the PDF scope note above)
 - ✅ **Template-silent vs. explicit formatting** — A style declares only what the template actually specifies; the renderer fills the rest from domain defaults (学位论文 vs. GB/T 9704 公文), so a formatting-free template still produces correct headings
 - ✅ **Semantic role detection** — Heuristically maps style names → block types (e.g. "标题 1" → heading1), restricted to paragraph styles and anchored so `Table Grid` is not mistaken for a heading
 - ✅ **Page geometry extraction** — Margins, page size, columns from every section, including paragraph-level section breaks
@@ -200,6 +204,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 - **pnpm workspace** — monorepo
 - **dolanmiu/docx** — DOCX generation
 - **JSZip** + **fast-xml-parser** — DOCX template parsing
+- **PDF.js** — Text and layout extraction from PDF references
 - **Node.js ≥ 22**
 
 ## How Template Parsing Works
@@ -221,6 +226,8 @@ The template parser:
 6. **Outputs** a clean JSON DSL
 
 This is the **key differentiator** vs docxtemplater/dolanmiu-docx: those tools fill templates with data, but OpenThesis **understands** the template's formatting logic.
+
+For a text-based PDF, the parser uses PDF.js to extract page geometry and positioned text, groups text items into lines, clusters fonts and sizes into reusable styles, estimates margins/columns/spacing, and assigns semantic roles. It emits the same template DSL consumed by the existing DOCX renderer.
 
 ## Roadmap
 

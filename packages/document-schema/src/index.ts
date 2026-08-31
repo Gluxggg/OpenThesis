@@ -17,7 +17,7 @@
 export type DocumentType = 'thesis' | 'journal' | 'official';
 
 // ============================================================
-// ── TEMPLATE (parsed from .docx) ───────────────────────────
+// ── TEMPLATE (parsed from .docx or inferred from .pdf) ─────
 // ============================================================
 
 export interface DocumentTemplate {
@@ -67,6 +67,9 @@ export interface TemplateMeta {
   documentType: DocumentType;
   subType?: string;
   sourceFile?: string;
+  sourceFormat?: 'docx' | 'pdf';
+  pageCount?: number;
+  warnings?: string[];
   parserVersion: string;
   parsedAt: string;
 }

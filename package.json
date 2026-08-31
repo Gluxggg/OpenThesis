@@ -2,9 +2,10 @@
   "name": "openthesis",
   "version": "0.2.0",
   "private": true,
-  "description": "AI-powered Document Template Engine — Parse any .docx template, write structured JSON, export submission-ready DOCX. Supports thesis, journal articles, and official documents.",
+  "description": "AI-powered Document Template Engine — parse DOCX or text-based PDF templates and export submission-ready DOCX for theses, journals, and official documents.",
   "keywords": [
     "docx",
+    "pdf",
     "template",
     "thesis",
     "academic",

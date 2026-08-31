@@ -1,15 +1,15 @@
 # @openthesis/template-parser
 
-> **Universal DOCX Template Parser** — parse any `.docx` template into structured JSON style DSL.
+> **DOCX + PDF Template Parser** — parse DOCX styles or infer text-PDF layouts into the same structured JSON style DSL.
 
 ## What it does
 
 ```
-  学校模板.docx
+  模板.docx / 格式说明.pdf
        │
        ▼
   template-parser
-  (JSZip + fast-xml-parser)
+  (Open XML / PDF.js)
        │
        ▼
   template.json
@@ -27,6 +27,7 @@
 ## Key Features
 
 - **Style inheritance resolution** — recursively resolves DOCX `basedOn` chains
+- **Text-PDF layout inference** — clusters positioned text into fonts, sizes, spacing, alignment, margins, columns, and semantic roles
 - **Page geometry extraction** — margins, page size, columns from section properties
 - **Semantic role detection** — heuristically maps style names to block types
 - **Chinese + Western font separation** — `eastAsia` vs `name` font attributes
@@ -42,6 +43,7 @@ npm install @openthesis/template-parser
 
 ```ts
 import { parseTemplate } from '@openthesis/template-parser';
+import { parsePdfTemplate } from '@openthesis/template-parser';
 import { readFileSync } from 'fs';
 
 const buffer = readFileSync('template.docx');
@@ -52,6 +54,11 @@ const template = await parseTemplate(buffer, {
 
 console.log(template.styles);
 console.log(template.page);
+
+const pdfTemplate = await parsePdfTemplate(readFileSync('format-guide.pdf'), {
+  organization: 'XX期刊',
+  documentType: 'journal',
+});
 ```
 
 ## How it works
@@ -64,6 +71,8 @@ A `.docx` file is a ZIP archive. The parser:
 4. **Extracts page settings** from `word/document.xml` section properties
 5. **Detects semantic roles** — regex matching on style names + outline level fallback
 6. **Outputs** a clean JSON DSL
+
+For a text-based PDF, PDF.js extracts page geometry and positioned text. The parser groups text into lines, clusters typography into reusable styles, estimates margins/columns/spacing, and maps styles to semantic roles. Scanned PDFs require OCR, and PDF-derived warnings should be reviewed before production use.
 
 ## Related
 

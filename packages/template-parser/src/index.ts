@@ -118,6 +118,7 @@ export async function parseTemplate(
     organization: metaOverrides?.organization?.trim() || 'Unknown Organization',
     name: metaOverrides?.name?.trim() || 'Untitled Template',
     documentType: metaOverrides?.documentType || 'thesis',
+    sourceFormat: 'docx',
     parserVersion: '0.2.0',
     parsedAt: new Date().toISOString(),
   };
@@ -1190,3 +1191,4 @@ function pickRoleWinners(
 // ── Utility Exports ───────────────────────────────────────
 
 export { extractRawStyles, resolveStyleInheritance, detectStyleRoles, countStyleUsage, pickRoleWinners };
+export { parsePdfTemplate } from './pdf.js';

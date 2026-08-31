@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { buildTestPdf } from './helpers/pdf.mjs';
 
 const cli = resolve('packages/cli/dist/index.js');
 
@@ -39,8 +40,33 @@ test('parse rejects non-DOCX input before it can be overwritten', () => {
   writeFileSync(input, 'keep me');
   const result = run(['parse', input]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /must be a \.docx file/);
+  assert.match(result.stderr, /must be a \.docx or \.pdf file/);
   assert.equal(readFileSync(input, 'utf8'), 'keep me');
+});
+
+test('parse infers a template JSON file from a text-based PDF', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'openthesis-cli-'));
+  const input = join(dir, 'template.pdf');
+  const output = join(dir, 'template.template.json');
+  writeFileSync(input, buildTestPdf());
+  const result = run(['parse', input, '--org', 'PDF University']);
+  assert.equal(result.status, 0, result.stderr);
+  const template = JSON.parse(readFileSync(output, 'utf8'));
+  assert.equal(template.meta.sourceFormat, 'pdf');
+  assert.equal(template.meta.organization, 'PDF University');
+  assert.ok(Object.keys(template.styles).length >= 2);
+
+  const content = join(dir, 'content.json');
+  const document = join(dir, 'rendered.docx');
+  writeFileSync(content, JSON.stringify({
+    type: 'thesis', meta: { title: 'PDF template test' }, cover: [],
+    sections: [{ id: 'intro', type: 'chapter', title: 'Introduction', content: [
+      { type: 'paragraph', text: 'Rendered with a PDF-derived template.' },
+    ] }],
+  }));
+  const build = run(['build', content, '-t', output, '-o', document]);
+  assert.equal(build.status, 0, build.stderr);
+  assert.equal(readFileSync(document).subarray(0, 2).toString('ascii'), 'PK');
 });
 
 test('build appends .docx for an extensionless content file', () => {
