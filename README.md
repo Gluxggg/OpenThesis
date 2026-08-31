@@ -76,6 +76,25 @@ graph TD
     class F outputStyle;
 ```
 
+## PDF templates and current scope
+
+Many universities, journals, and government agencies publish their formatting guides or sample documents only as PDF. OpenThesis can use those PDFs as **visual specifications**, but the current parser does **not** parse PDF files directly.
+
+| Input | Current support | Notes |
+| --- | --- | --- |
+| `.docx` template | ✅ Native | Extracts named styles, inheritance, page geometry, headers, footers, and columns |
+| Text PDF | ⚠️ Reference only | PDF stores positioned page content rather than reusable Word style definitions |
+| Scanned PDF | ⚠️ Reference only | OCR and layout reconstruction are not built into OpenThesis |
+| Markdown / OpenThesis JSON | ✅ Native | Used as document content and rendered to editable DOCX |
+
+If the official source is PDF-only:
+
+1. Prefer an official editable `.docx` template when one is available.
+2. Otherwise convert or OCR the PDF to DOCX with an external tool, then clean its Word styles and page settings.
+3. Run `thesis parse converted-template.docx`, build the document, and compare the result against the original PDF.
+
+PDF conversion can fragment paragraphs, substitute fonts, and flatten headers or tables, so a converted file should not be treated as an automatically faithful template. Native PDF layout understanding and semantic reconstruction are planned for V4.
+
 ## Quick Start
 
 ```bash

@@ -50,6 +50,25 @@ graph TD
     E --> F["可提交的 DOCX 文档"]
 ```
 
+## PDF 模板与当前能力边界
+
+许多高校、期刊和政府部门只发布 PDF 格式的排版规范或示例文件。OpenThesis 可以把这些 PDF 作为**版式参照**，但当前解析器**不能直接解析 PDF 文件**。
+
+| 输入 | 当前支持情况 | 说明 |
+| --- | --- | --- |
+| `.docx` 模板 | ✅ 原生支持 | 可提取命名样式、继承关系、页面尺寸、页眉页脚和分栏设置 |
+| 文本型 PDF | ⚠️ 仅作参照 | PDF 保存的是页面上的定位内容，不包含可复用的 Word 样式定义 |
+| 扫描型 PDF | ⚠️ 仅作参照 | OpenThesis 暂未内置 OCR 和版面重建能力 |
+| Markdown / OpenThesis JSON | ✅ 原生支持 | 作为文档内容输入，并渲染为可编辑 DOCX |
+
+如果官方只提供 PDF：
+
+1. 优先寻找官方可编辑的 `.docx` 模板。
+2. 如果没有 DOCX，先用外部工具把 PDF 转换或 OCR 为 DOCX，再清理 Word 样式和页面设置。
+3. 运行 `thesis parse converted-template.docx`，生成文档后与原始 PDF 逐项对照。
+
+PDF 转换可能造成段落碎片化、字体替换、页眉或表格扁平化，因此转换后的文件不能自动视为高保真模板。PDF 原生布局理解和语义重建计划在 V4 实现。
+
 ## 快速开始
 
 ```bash
@@ -136,7 +155,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 | V1 | 核心解析、渲染与 CLI | ✅ 完成 |
 | V2 | 图片、双栏输出与 Markdown 解析器 | ✅ 完成 |
 | V3 | 原生 LaTeX → OMML | 🚧 进行中（核心与常用高级子集） |
-| V4 | 基于机器学习的模板布局理解 | 📋 未来计划 |
+| V4 | 机器学习辅助的 PDF 布局理解与语义重建 | 📋 未来计划 |
 | V5 | 自动生成论文内容的 AI Agent | 📋 未来计划 |
 | SaaS | 社区贡献的模板市场 | 📋 未来计划 |
 
