@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/1771902720-lgtm/OpenThesis/actions/workflows/ci.yml"><img src="https://github.com/1771902720-lgtm/OpenThesis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Gluxggg/OpenThesis/actions/workflows/ci.yml"><img src="https://github.com/Gluxggg/OpenThesis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="许可证"></a>
   <img src="https://img.shields.io/badge/status-V2_complete-brightgreen" alt="状态">
   <img src="https://img.shields.io/badge/node-%3E%3D22-success" alt="Node">
@@ -54,7 +54,7 @@ graph TD
 
 ```bash
 # 1. 安装并构建
-git clone https://github.com/1771902720-lgtm/OpenThesis.git
+git clone https://github.com/Gluxggg/OpenThesis.git
 cd OpenThesis
 pnpm install && pnpm build
 
@@ -143,8 +143,8 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 ## Star History
 
 <p align="center">
-  <a href="https://www.star-history.com/#1771902720-lgtm/OpenThesis&Date">
-    <img src="https://api.star-history.com/svg?repos=1771902720-lgtm/OpenThesis&type=Date" alt="OpenThesis Star 历史趋势图" width="700">
+  <a href="https://www.star-history.com/#Gluxggg/OpenThesis&Date">
+    <img src="https://api.star-history.com/svg?repos=Gluxggg/OpenThesis&type=Date" alt="OpenThesis Star 历史趋势图" width="700">
   </a>
 </p>
 

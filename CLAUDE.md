@@ -76,10 +76,61 @@ thesis build <manuscript.md> --type thesis -t <template.json> -o output.docx
 | Template parsing | Works best with real Word templates | Current: works for most templates |
 | Markdown inline styling | Paragraph schema stores plain text | Future: rich inline ranges |
 | Markdown dialect | Predictable manuscript subset | Expand only with compatibility tests |
+| Multi-section templates | The cover, front matter and body each get their own section; a template that changes its setup mid-chapter (landscape, a two-column passage) is still flattened into the part it falls in | Map a part to a page setup the content can name |
+| Document grid | The template snaps text to a 312-twip `w:docGrid`; the writer library emits its own `linePitch="360"` | Write `w:docGrid` in the post-pass |
+| Unsupported LaTeX | The Unicode fallback is lossy; `convertLatexToOmml` reports it, but the AST path has no diagnostic channel | Surface unsupported syntax on the rendered document |
+
+See `AUDIT.md` for the full audit, including the findings that are still open.
+
+## Diagnostics
+
+Both entry points now report problems instead of failing silently:
+
+- `thesis parse` prints a `warnings` list — a template that carries no
+  formatting at all, a style inheriting from an undefined style, or a document
+  with more sections than can be rendered. The same array is stored on the
+  template JSON.
+- `thesis build` runs `validateDocument` / `validateLegacyDocument` first and
+  reports every problem at once with a path such as
+  `sections[0].content[2].headers`, instead of failing inside the OOXML builder.
+
+## The built-in USTB template
+
+`assets/ustb-thesis-template.json` was regenerated from
+`《北京科技大学硕士学位论文模板》.docx` with the fixed parser: all 72 styles now
+declare formatting, and `roleWinners` records which style drives each role. The
+numbers match `《北京科技大学研究生学位论文书写指南》` — 一级标题 黑体 小三 加粗
+居中, 二级/三级标题 黑体 四号 加粗, 正文 宋体 小四 with a 2-character first-line
+indent.
+
+Two parts of that file come from different places, and a regeneration must keep
+them apart:
+
+- **the style table is curated.** The template file does not declare everything
+  the guide asks for — `w:pageBreakBefore` on chapter headings, the 1 cm / 1.25 cm
+  hanging indents, and the three cover tiers were written into the asset from the
+  guide. Regenerating the whole file from a `.docx` therefore *loses* them.
+- **the section facts are parsed.** `page`, `pageSections`, `evenAndOddHeaders`
+  and `warnings` are read out of the template's `document.xml`, `settings.xml`
+  and `header*/footer*` parts. Refresh those four keys after a parser change
+  rather than hand-editing them:
+
+```bash
+node packages/cli/dist/index.js parse "<template>.docx" --type thesis --org "北京科技大学"
+```
+
+## Sections
+
+A thesis is rendered as up to three sections — cover, front matter, body — with
+the split derived from the content (`cover`, then the `abstract` / `toc` /
+`list_of_figures` / `list_of_tables` sections, then everything else plus the back
+matter). A template that declares more than one `pageSections` entry drives each
+part's geometry, page-number format and running heads; a template that declares
+none still produces the single section it always did.
 
 ## Next Steps
 1. Add explicit unsupported-syntax diagnostics and custom macro expansion to the equation engine
-2. Get real university and journal templates to expand parser compatibility fixtures
+2. Get real university and journal templates to expand parser compatibility fixtures (`.gitignore` now allows `tests/fixtures/**/*.docx`)
 3. Add ML-assisted layout-role understanding behind deterministic fallbacks
 4. Add agent content-generation workflows on top of the typed schema
 5. Build a community-contributed template marketplace

@@ -11,6 +11,7 @@
   "sections": [
     {
       "id": "intro",
+      "type": "chapter",
       "title": "第一章  图片测试",
       "content": [
         { "type": "paragraph", "text": "下面是嵌入的图片：" },

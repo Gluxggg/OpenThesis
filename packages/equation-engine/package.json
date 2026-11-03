@@ -3,8 +3,8 @@
   "version": "0.2.0",
   "description": "LaTeX math AST for native OMML rendering with Unicode and optional Pandoc compatibility fallbacks",
   "keywords": ["latex", "equation", "omml", "mathml", "docx", "office-math", "typescript"],
-  "repository": { "type": "git", "url": "https://github.com/1771902720-lgtm/OpenThesis.git", "directory": "packages/equation-engine" },
-  "homepage": "https://github.com/1771902720-lgtm/OpenThesis#readme",
+  "repository": { "type": "git", "url": "https://github.com/Gluxggg/OpenThesis.git", "directory": "packages/equation-engine" },
+  "homepage": "https://github.com/Gluxggg/OpenThesis#readme",
   "license": "MIT",
   "author": "OpenThesis Contributors",
   "publishConfig": { "access": "public" },
@@ -25,7 +25,7 @@
     "test": "echo 'Tests not yet configured'"
   },
   "dependencies": {
-    "adm-zip": "^0.6.0"
+    "adm-zip": "^0.6.1"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.7",

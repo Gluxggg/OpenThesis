@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/1771902720-lgtm/OpenThesis/actions/workflows/ci.yml"><img src="https://github.com/1771902720-lgtm/OpenThesis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Gluxggg/OpenThesis/actions/workflows/ci.yml"><img src="https://github.com/Gluxggg/OpenThesis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/status-V2_complete-brightgreen" alt="Status">
   <img src="https://img.shields.io/badge/node-%3E%3D22-success" alt="Node">
@@ -80,7 +80,7 @@ graph TD
 
 ```bash
 # 1. Install & build
-git clone https://github.com/1771902720-lgtm/OpenThesis.git
+git clone https://github.com/Gluxggg/OpenThesis.git
 cd OpenThesis
 pnpm install && pnpm build
 
@@ -155,18 +155,23 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 ## Features
 
 - ✅ **Style inheritance resolution** — DOCX `basedOn` chains are recursively resolved
-- ✅ **Semantic role detection** — Heuristically maps style names → block types (e.g. "标题 1" → heading1)
-- ✅ **Page geometry extraction** — Margins, page size, columns from section properties
-- ✅ **Complete table formatting** — Gridlines, header shading, column widths
+- ✅ **Template-silent vs. explicit formatting** — A style declares only what the template actually specifies; the renderer fills the rest from domain defaults (学位论文 vs. GB/T 9704 公文), so a formatting-free template still produces correct headings
+- ✅ **Semantic role detection** — Heuristically maps style names → block types (e.g. "标题 1" → heading1), restricted to paragraph styles and anchored so `Table Grid` is not mistaken for a heading
+- ✅ **Page geometry extraction** — Margins, page size, columns from every section, including paragraph-level section breaks
+- ✅ **Template diagnostics** — `parse` reports a template that carries no formatting, inherits from undefined styles, or declares more sections than can be rendered
+- ✅ **Content validation** — `build` checks content against the schema and reports every problem at once with a path
+- ✅ **Template-fitted tables** — Width follows the printable page area; cell, header, and caption typography resolve through the template
 - ✅ **Chinese + Western font separation** — 中文宋体/黑体 + English Times New Roman
 - ✅ **Header/footer/page numbers** — With template-configurable text
 - ✅ **Image embedding** — PNG/JPEG/GIF/BMP detection, aspect ratio, and captions
-- ✅ **Lists, code blocks, and blockquotes** — Native document rendering
-- ✅ **Markdown import** — Front matter, nested sections, lists, tables, figures, code, quotes, and display equations
+- ✅ **Real Word lists** — Auto-numbered bullets and numbering via OOXML, with each list restarting its own counter
+- ✅ **Lists, code blocks, and blockquotes** — Native paragraph rendering with borders and indents
+- ✅ **Markdown import** — Front matter (scalars, flow sequences, block sequences), nested sections, lists, tables, figures, code, quotes, and display equations
 - ✅ **Direct Markdown builds** — `.md` → `.docx` without an intermediate file
 - ✅ **Agent-ready Skill** — Standard `SKILL.md`, executable wrapper, UI metadata, and progressive references
 - ✅ **Native Office Math core** — Fractions, roots, scripts, sums, integrals, symbols, and Greek letters emit OMML
 - ✅ **Advanced native math slice** — Functions, limits, accents, scalable delimiters, binomials, matrices, cases, and aligned equations
+- ✅ **Conversion diagnostics** — `convertLatexToOmml` reports whether the result is native OMML or a lossy Unicode fallback, and why
 - ✅ **Legacy format support** — Backward compatible with existing `{cover_blocks, body_blocks}` JSON
 - 🚧 **Remaining V3 coverage** — User-defined macros, array column specifications, equation arrays, and less common AMS environments
 

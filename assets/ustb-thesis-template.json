@@ -1,11 +1,11 @@
 {
   "meta": {
     "organization": "北京科技大学",
-    "name": "Untitled Template",
     "documentType": "thesis",
-    "parserVersion": "0.1.0",
-    "parsedAt": "2026-07-06T05:34:03.992Z",
-    "sourceFile": "C:\\Users\\17719\\Desktop\\各类文件\\学位论文 模板\\《北京科技大学硕士学位论文模板》.docx"
+    "sourceFile": "《北京科技大学硕士学位论文模板》.docx",
+    "name": "北京科技大学硕士学位论文模板",
+    "parserVersion": "0.2.0",
+    "parsedAt": "2026-09-28T13:48:44.298Z"
   },
   "page": {
     "width": 11906,
@@ -18,75 +18,499 @@
     },
     "headerDistance": 851,
     "footerDistance": 850,
+    "gutter": 567,
+    "mirrorMargins": true,
     "columns": 1,
-    "columnGutter": 0
+    "columnGutter": 0,
+    "headers": {
+      "even": {
+        "text": "现代绿色化学中的物理有机问题",
+        "pageNumber": false,
+        "rule": true
+      },
+      "default": {
+        "text": "北京科技大学硕士学位论文",
+        "pageNumber": false,
+        "rule": true
+      }
+    },
+    "footers": {
+      "default": {
+        "text": "2",
+        "pageNumber": true
+      },
+      "even": {
+        "text": "2",
+        "pageNumber": true
+      }
+    }
   },
+  "pageSections": [
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 851,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 0,
+      "pageNumberFormat": "upperRoman",
+      "headers": {
+        "even": {
+          "text": "",
+          "pageNumber": false,
+          "rule": true
+        }
+      }
+    },
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 850,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 0,
+      "pageNumberFormat": "upperRoman",
+      "headers": {
+        "even": {
+          "text": "",
+          "pageNumber": false
+        }
+      }
+    },
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 850,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 0,
+      "pageNumberFormat": "upperRoman",
+      "footers": {
+        "default": {
+          "text": "",
+          "pageNumber": false
+        }
+      },
+      "headers": {
+        "even": {
+          "text": "",
+          "pageNumber": false
+        }
+      }
+    },
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 850,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 0,
+      "pageNumberFormat": "upperRoman",
+      "pageNumberStart": 1,
+      "headers": {
+        "even": {
+          "text": "",
+          "pageNumber": false
+        },
+        "default": {
+          "text": "北京科技大学硕士学位论文",
+          "pageNumber": false,
+          "rule": true
+        }
+      },
+      "footers": {
+        "default": {
+          "text": "77",
+          "pageNumber": true
+        },
+        "even": {
+          "text": "66",
+          "pageNumber": true
+        }
+      }
+    },
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 850,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 0,
+      "pageNumberFormat": "upperRoman",
+      "pageNumberStart": 1,
+      "headers": {
+        "even": {
+          "text": "现代绿色化学中的物理有机问题",
+          "pageNumber": false,
+          "rule": true
+        },
+        "default": {
+          "text": "北京科技大学硕士学位论文",
+          "pageNumber": false,
+          "rule": true
+        }
+      },
+      "footers": {
+        "default": {
+          "text": "2",
+          "pageNumber": true
+        },
+        "even": {
+          "text": "2",
+          "pageNumber": true
+        }
+      }
+    },
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 850,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 0,
+      "pageNumberFormat": "upperRoman",
+      "headers": {
+        "even": {
+          "text": "现代绿色化学中的物理有机问题",
+          "pageNumber": false,
+          "rule": true
+        },
+        "default": {
+          "text": "北京科技大学硕士学位论文",
+          "pageNumber": false,
+          "rule": true
+        }
+      },
+      "footers": {
+        "default": {
+          "text": "2",
+          "pageNumber": true
+        },
+        "even": {
+          "text": "2",
+          "pageNumber": true
+        }
+      }
+    },
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 850,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 0,
+      "pageNumberFormat": "upperRoman",
+      "headers": {
+        "even": {
+          "text": "现代绿色化学中的物理有机问题",
+          "pageNumber": false,
+          "rule": true
+        },
+        "default": {
+          "text": "北京科技大学硕士学位论文",
+          "pageNumber": false,
+          "rule": true
+        }
+      },
+      "footers": {
+        "default": {
+          "text": "2",
+          "pageNumber": true
+        },
+        "even": {
+          "text": "2",
+          "pageNumber": true
+        }
+      }
+    },
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 850,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 0,
+      "pageNumberFormat": "upperRoman",
+      "headers": {
+        "even": {
+          "text": "现代绿色化学中的物理有机问题",
+          "pageNumber": false,
+          "rule": true
+        },
+        "default": {
+          "text": "北京科技大学硕士学位论文",
+          "pageNumber": false,
+          "rule": true
+        }
+      },
+      "footers": {
+        "default": {
+          "text": "2",
+          "pageNumber": true
+        },
+        "even": {
+          "text": "2",
+          "pageNumber": true
+        }
+      }
+    },
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 851,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 720,
+      "pageNumberStart": 1,
+      "footers": {
+        "default": {
+          "text": "2",
+          "pageNumber": true
+        },
+        "even": {
+          "text": "2",
+          "pageNumber": true
+        }
+      },
+      "headers": {
+        "even": {
+          "text": "现代绿色化学中的物理有机问题",
+          "pageNumber": false,
+          "rule": true
+        },
+        "default": {
+          "text": "北京科技大学硕士学位论文",
+          "pageNumber": false,
+          "rule": true
+        }
+      }
+    },
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 850,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 0,
+      "headers": {
+        "even": {
+          "text": "现代绿色化学中的物理有机问题",
+          "pageNumber": false,
+          "rule": true
+        },
+        "default": {
+          "text": "北京科技大学硕士学位论文",
+          "pageNumber": false,
+          "rule": true
+        }
+      },
+      "footers": {
+        "default": {
+          "text": "2",
+          "pageNumber": true
+        },
+        "even": {
+          "text": "2",
+          "pageNumber": true
+        }
+      }
+    },
+    {
+      "width": 11906,
+      "height": 16838,
+      "margins": {
+        "top": 1701,
+        "bottom": 1134,
+        "left": 1701,
+        "right": 1701
+      },
+      "headerDistance": 851,
+      "footerDistance": 850,
+      "gutter": 567,
+      "mirrorMargins": true,
+      "columns": 1,
+      "columnGutter": 0,
+      "headers": {
+        "even": {
+          "text": "现代绿色化学中的物理有机问题",
+          "pageNumber": false,
+          "rule": true
+        },
+        "default": {
+          "text": "北京科技大学硕士学位论文",
+          "pageNumber": false,
+          "rule": true
+        }
+      },
+      "footers": {
+        "default": {
+          "text": "2",
+          "pageNumber": true
+        },
+        "even": {
+          "text": "2",
+          "pageNumber": true
+        }
+      }
+    }
+  ],
+  "evenAndOddHeaders": true,
   "styles": {
     "1": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 30,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center",
+        "spaceBefore": 340,
+        "spaceAfter": 340,
+        "outlineLevel": 0,
+        "pageBreakBefore": true
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "2": {
       "font": {
-        "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "name": "Arial",
+        "eastAsia": "黑体",
+        "size": 32,
+        "bold": true
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "spaceBefore": 260,
+        "spaceAfter": 260,
+        "outlineLevel": 1
+      },
+      "lineSpacing": 416,
+      "lineSpacingRule": "auto"
     },
     "3": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 32,
+        "bold": true
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "spaceBefore": 260,
+        "spaceAfter": 260,
+        "outlineLevel": 2
+      },
+      "lineSpacing": 416,
+      "lineSpacingRule": "auto"
     },
     "10": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 30,
+        "bold": true
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "11": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "justified"
       }
     },
     "12": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "15": {
       "font": {
@@ -94,108 +518,92 @@
         "eastAsia": "宋体",
         "size": 24
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "100": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "宋体"
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "a": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "justified"
       }
     },
     "a0": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "宋体"
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "a1": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "宋体"
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "a2": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "宋体"
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "u1": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 30,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center",
+        "spaceBefore": 340,
+        "spaceAfter": 340,
+        "outlineLevel": 0,
+        "pageBreakBefore": true
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "a3": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 20
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "justified"
       }
     },
     "a4": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "left"
       }
     },
     "a6": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
+        "spaceAfter": 120
       }
     },
     "TOC3": {
@@ -206,51 +614,49 @@
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "leftIndent": 960
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "a7": {
       "font": {
-        "name": "Times New Roman",
+        "name": "宋体",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "justified"
       }
     },
     "a8": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 18
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "justified"
       }
     },
     "aa": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 18
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "left"
       }
     },
     "ac": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 18
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "justified"
       }
     },
     "TOC1": {
@@ -260,19 +666,19 @@
         "size": 24
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "justified"
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "ae": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 18
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "left"
       }
     },
     "TOC2": {
@@ -283,249 +689,281 @@
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "leftIndent": 480
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "af": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "left"
       }
     },
     "af1": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "宋体"
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "justified"
       }
     },
     "af2": {
       "font": {
         "name": "Times New Roman",
         "eastAsia": "宋体",
-        "size": 24
+        "underline": true,
+        "color": "0000FF"
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "af3": {
       "font": {
         "name": "Times New Roman",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "af4": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "宋体"
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "u5": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 30,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center",
+        "spaceBefore": 340,
+        "spaceAfter": 330,
+        "outlineLevel": 0
+      },
+      "lineSpacing": 579,
+      "lineSpacingRule": "auto"
     },
     "u2": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 28,
+        "bold": true
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "spaceBefore": 260,
+        "spaceAfter": 260,
+        "outlineLevel": 1,
+        "hangingIndent": 567
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "u3": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 28,
+        "bold": true
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "spaceBefore": 260,
+        "spaceAfter": 260,
+        "outlineLevel": 2,
+        "hangingIndent": 709
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "af5": {
       "font": {
-        "name": "Times New Roman",
+        "name": "宋体",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
+        "firstLineIndent": 420
       }
     },
     "Default": {
       "font": {
-        "name": "Times New Roman",
+        "name": "宋体",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 24,
+        "color": "000000"
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "b1": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 30,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center",
+        "spaceBefore": 340,
+        "spaceAfter": 340,
+        "outlineLevel": 0,
+        "pageBreakBefore": true
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "b": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
         "size": 24
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "firstLineIndent": 480,
+        "spaceBefore": 10,
+        "spaceAfter": 10
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "b0": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "center"
       }
     },
     "b2": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 28,
+        "bold": true
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "spaceBefore": 260,
+        "spaceAfter": 260,
+        "outlineLevel": 1,
+        "hangingIndent": 567
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "af6": {
       "font": {
-        "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "name": "Calibri",
+        "eastAsia": "黑体",
+        "size": 32
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "center",
+        "spaceBefore": 480,
+        "spaceAfter": 360
       }
     },
     "af7": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "center"
       }
     },
     "af8": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "firstLineIndent": 480
+      },
+      "lineSpacing": 320,
+      "lineSpacingRule": "exact"
     },
     "u6": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
+        "spaceBefore": 100,
+        "spaceAfter": 100
       }
     },
     "af9": {
       "font": {
-        "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "name": "Cambria",
+        "eastAsia": "黑体",
+        "size": 30,
+        "bold": false
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center",
+        "spaceBefore": 340,
+        "spaceAfter": 340,
+        "outlineLevel": 0
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "afa": {
       "font": {
-        "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "name": "Cambria",
+        "eastAsia": "黑体",
+        "size": 30,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center",
+        "spaceBefore": 340,
+        "spaceAfter": 340,
+        "outlineLevel": 0
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "afb": {
       "font": {
-        "name": "Times New Roman",
+        "name": "宋体",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "center"
       }
     },
     "afc": {
       "font": {
         "name": "Times New Roman",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "justified"
       }
     },
     "z": {
@@ -534,76 +972,81 @@
         "eastAsia": "宋体",
         "size": 24
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "u": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 30,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center",
+        "spaceBefore": 340,
+        "spaceAfter": 330,
+        "outlineLevel": 0
+      },
+      "lineSpacing": 579,
+      "lineSpacingRule": "auto"
     },
     "P4": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
+        "alignment": "justified"
       }
     },
     "u7": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 24,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "justified"
+      },
+      "lineSpacing": 400,
+      "lineSpacingRule": "exact"
     },
     "uChar": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 24,
+        "bold": true,
+        "underline": false
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "u8": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 30,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center"
+      },
+      "lineSpacing": 400,
+      "lineSpacingRule": "exact"
     },
     "u9": {
       "font": {
         "name": "Times New Roman",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center"
+      },
+      "lineSpacing": 400,
+      "lineSpacingRule": "exact"
     },
     "ua": {
       "font": {
@@ -613,8 +1056,12 @@
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "firstLineIndent": 480,
+        "spaceBefore": 10,
+        "spaceAfter": 10
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "uChar1": {
       "font": {
@@ -622,43 +1069,44 @@
         "eastAsia": "宋体",
         "size": 24
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "uChar0": {
       "font": {
         "name": "Times New Roman",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "u4": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 21,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center",
+        "spaceBefore": 10,
+        "spaceAfter": 10
+      },
+      "lineSpacing": 312
     },
     "ub": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 21,
+        "bold": true
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "center",
+        "spaceBefore": 150,
+        "spaceAfter": 50
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "u0": {
       "font": {
@@ -668,150 +1116,164 @@
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "hangingIndent": 567,
+        "leftIndent": 0,
+        "spaceBefore": 10,
+        "spaceAfter": 10
+      },
+      "lineSpacing": 312,
+      "lineSpacingRule": "auto"
     },
     "a5": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "af0": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21,
+        "bold": true
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "a9": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 18
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "z0": {
       "font": {
         "name": "Times New Roman",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "z1": {
       "font": {
         "name": "Times New Roman",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 36,
+        "bold": true
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "z2": {
       "font": {
         "name": "Times New Roman",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 30
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "afd": {
       "font": {
         "name": "Times New Roman",
         "eastAsia": "宋体",
-        "size": 24
+        "color": "808080"
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "TOC10": {
       "font": {
         "name": "Times New Roman",
-        "eastAsia": "宋体",
-        "size": 24
+        "eastAsia": "黑体",
+        "size": 32,
+        "bold": false,
+        "color": "2F5496"
       },
       "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+        "alignment": "left",
+        "spaceBefore": 240,
+        "spaceAfter": 0,
+        "outlineLevel": 9
+      },
+      "lineSpacing": 259,
+      "lineSpacingRule": "auto"
     },
     "ab": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 18
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "MTConvertedEquation": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Cambria Math",
         "eastAsia": "宋体",
-        "size": 24
+        "italic": true
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "ad": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 18
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "afe": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
-      "paragraph": {
-        "alignment": "justified",
-        "firstLineIndent": 0
-      }
+      "paragraph": {}
     },
     "aff": {
       "font": {
-        "name": "Times New Roman",
+        "name": "Calibri",
         "eastAsia": "宋体",
-        "size": 24
+        "size": 21
       },
       "paragraph": {
         "alignment": "justified",
-        "firstLineIndent": 0
+        "firstLineIndent": 480
+      }
+    },
+    "coverTitle": {
+      "font": {
+        "name": "Times New Roman",
+        "eastAsia": "宋体",
+        "size": 36,
+        "bold": true
+      },
+      "paragraph": {
+        "alignment": "center"
+      },
+      "lineSpacing": 240
+    },
+    "coverLine": {
+      "font": {
+        "name": "Times New Roman",
+        "eastAsia": "宋体",
+        "size": 28,
+        "bold": true
+      },
+      "paragraph": {
+        "alignment": "center"
+      },
+      "lineSpacing": 360
+    },
+    "coverMeta": {
+      "font": {
+        "name": "Times New Roman",
+        "eastAsia": "宋体",
+        "size": 21
+      },
+      "paragraph": {
+        "alignment": "justified"
       }
     }
   },
@@ -819,75 +1281,65 @@
     "1": "heading1",
     "2": "heading2",
     "3": "heading3",
-    "10": "paragraph",
     "11": "paragraph",
     "12": "paragraph",
-    "15": "paragraph",
-    "100": "paragraph",
     "a": "paragraph",
-    "a0": "paragraph",
-    "a1": "paragraph",
-    "a2": "paragraph",
-    "u1": "paragraph",
+    "u1": "heading1",
+    "a6": "paragraph",
+    "u5": "section_heading",
+    "u2": "heading2",
+    "u3": "heading3",
+    "b1": "heading1",
+    "b2": "heading2",
+    "af9": "heading1",
+    "afa": "heading1",
+    "u": "section_heading",
+    "u8": "section_heading",
+    "ua": "paragraph",
+    "u4": "figure_caption",
+    "ub": "table_caption",
+    "u0": "reference_item",
     "a3": "paragraph",
     "a4": "paragraph",
-    "a6": "paragraph",
-    "TOC3": "paragraph",
+    "TOC3": "toc_entry",
     "a7": "paragraph",
     "a8": "paragraph",
     "aa": "paragraph",
     "ac": "paragraph",
-    "TOC1": "paragraph",
+    "TOC1": "toc_entry",
     "ae": "paragraph",
-    "TOC2": "paragraph",
+    "TOC2": "toc_entry",
     "af": "paragraph",
-    "af1": "heading3",
-    "af2": "paragraph",
-    "af3": "paragraph",
-    "af4": "paragraph",
-    "u5": "paragraph",
-    "u2": "paragraph",
-    "u3": "paragraph",
     "af5": "paragraph",
     "Default": "paragraph",
-    "b1": "paragraph",
     "b": "paragraph",
     "b0": "paragraph",
-    "b2": "paragraph",
     "af6": "paragraph",
     "af7": "paragraph",
     "af8": "paragraph",
     "u6": "paragraph",
-    "af9": "paragraph",
-    "afa": "paragraph",
     "afb": "paragraph",
     "afc": "paragraph",
-    "z": "paragraph",
-    "u": "paragraph",
     "P4": "paragraph",
     "u7": "paragraph",
-    "uChar": "paragraph",
-    "u8": "paragraph",
     "u9": "paragraph",
-    "ua": "paragraph",
-    "uChar1": "paragraph",
-    "uChar0": "paragraph",
-    "u4": "paragraph",
-    "ub": "paragraph",
-    "u0": "paragraph",
-    "a5": "paragraph",
-    "af0": "paragraph",
-    "a9": "paragraph",
-    "z0": "paragraph",
-    "z1": "paragraph",
-    "z2": "paragraph",
-    "afd": "paragraph",
-    "TOC10": "paragraph",
-    "ab": "paragraph",
-    "MTConvertedEquation": "paragraph",
-    "ad": "paragraph",
+    "TOC10": "toc_entry",
     "afe": "paragraph",
     "aff": "paragraph"
+  },
+  "roleWinners": {
+    "heading1": "1",
+    "heading2": "u2",
+    "heading3": "u3",
+    "paragraph": "ua",
+    "section_heading": "u5",
+    "figure_caption": "u4",
+    "table_caption": "ub",
+    "reference_item": "u0",
+    "cover_title": "coverTitle",
+    "cover_line": "coverLine",
+    "cover_meta": "coverMeta",
+    "toc_entry": "TOC1"
   },
   "styleInheritance": {
     "1": "u1",
@@ -938,5 +1390,8 @@
     "MTConvertedEquation": "a0",
     "ad": "a0",
     "aff": "a"
-  }
+  },
+  "warnings": [
+    "The document declares 11 sections; the generator reproduces the cover, the front matter and the body, so a section that only changes the setup mid-chapter is not reproduced."
+  ]
 }

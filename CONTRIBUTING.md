@@ -20,7 +20,7 @@ Open an issue with:
 ### 💻 Code Contributions
 
 ```bash
-git clone https://github.com/1771902720-lgtm/OpenThesis.git
+git clone https://github.com/Gluxggg/OpenThesis.git
 cd OpenThesis
 pnpm install
 pnpm check

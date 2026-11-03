@@ -89,7 +89,7 @@ Equations are emitted as editable native Office Math for the syntax documented i
 
 ## Related
 
-- [OpenThesis](https://github.com/1771902720-lgtm/OpenThesis) — Full document template engine
+- [OpenThesis](https://github.com/Gluxggg/OpenThesis) — Full document template engine
 - [@openthesis/template-parser](https://www.npmjs.com/package/@openthesis/template-parser) — Parse DOCX → JSON
 - [@openthesis/equation-engine](https://www.npmjs.com/package/@openthesis/equation-engine) — LaTeX → OMML
 

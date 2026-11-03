@@ -23,10 +23,42 @@ export type DocumentType = 'thesis' | 'journal' | 'official';
 export interface DocumentTemplate {
   meta: TemplateMeta;
   page: PageSettings;
+  /**
+   * Every section geometry found, in document order (cover, body, appendix…).
+   * `page` is the last one — the body — which is what a single-section render
+   * targets. Present only when the document actually declares sections.
+   */
+  pageSections?: PageSettings[];
+  /**
+   * `<w:evenAndOddHeaders/>` in `word/settings.xml`: the document tells Word that
+   * odd and even pages use different running heads, so a `w:type="even"`
+   * reference is honoured and `w:type="default"` means *odd* pages only.
+   *
+   * This is a document setting, not a section property — writing it into
+   * `w:sectPr` produces a part Word ignores.
+   */
+  evenAndOddHeaders?: boolean;
   styles: Record<string, ParagraphStyle>;
-  styleRoles: Record<string, BlockType>;
+  styleRoles: Record<string, StyleRole>;
+  /**
+   * The style that should drive each role.
+   *
+   * `styleRoles` is an id→role map, and a plain object always enumerates
+   * integer-like keys first — Word commonly names styles `1`, `2`, `3`, so "the
+   * first entry carrying this role" may not be the one the template was built
+   * around. This records the parser's decision explicitly, leaving `styleRoles`
+   * as the complete mapping.
+   */
+  roleWinners?: Partial<Record<StyleRole, string>>;
   styleInheritance?: Record<string, string>;
   documentType?: DocumentType;
+  /**
+   * Non-fatal problems found while parsing — a style based on a style the
+   * template does not define, a template that declares no formatting at all,
+   * or several sections where only one can be rendered. Callers should surface
+   * these rather than letting a template silently produce wrong output.
+   */
+  warnings?: string[];
 }
 
 export interface TemplateMeta {
@@ -50,8 +82,72 @@ export interface PageSettings {
   };
   headerDistance?: number;
   footerDistance?: number;
+  /**
+   * Twips reserved on the binding edge (`w:pgMar/@w:gutter`). The university
+   * guide asks for 1 cm on the left.
+   */
+  gutter?: number;
+  /**
+   * 对称页边距: mirror the left/right margins on facing pages, as the guide asks
+   * for a bound thesis. The writer library has no option for it, so the renderer
+   * sets the OOXML flag itself.
+   */
+  mirrorMargins?: boolean;
   columns?: number;
   columnGutter?: number;
+  /**
+   * `w:pgNumType/@w:fmt`: the format this section numbers its pages in. The
+   * template declares `upperRoman` for the front matter and nothing for the
+   * body, and a section that restarts without naming a format is decimal.
+   */
+  pageNumberFormat?: PageNumberFormat;
+  /**
+   * `w:pgNumType/@w:start`: restart the count at this number here. The template
+   * restarts the front matter at I and the body at 1.
+   */
+  pageNumberStart?: number;
+  /**
+   * The running heads (`w:headerReference`) this section ends up with, one per
+   * OOXML slot, after inheritance from the preceding sections is resolved.
+   *
+   * OOXML inherits each of the six slots independently, so a section that
+   * declares nothing still prints its predecessor's head — the body of the
+   * university template declares no `w:headerReference` of its own yet does
+   * print 北京科技大学硕士学位论文 on odd pages and the thesis title on even ones.
+   */
+  headers?: RunningHeadSlots;
+  /** The footers (`w:footerReference`) this section ends up with, same rules. */
+  footers?: RunningHeadSlots;
+}
+
+/** Page-number formats the generator understands (`w:pgNumType/@w:fmt`). */
+export type PageNumberFormat =
+  | 'decimal' | 'upperRoman' | 'lowerRoman' | 'upperLetter' | 'lowerLetter'
+  | 'chineseCounting' | 'chineseCountingThousand' | 'none';
+
+/**
+ * One running-head/footer slot, as the template's own part defines it. A slot is
+ * absent when no section references a part for it; it is present with `text: ''`
+ * when the template points at an *empty* part, which is how the university
+ * template suppresses the head on the cover.
+ */
+export interface RunningHead {
+  /** Literal text of the referenced part. `''` = the part is empty. */
+  text?: string;
+  /** The part draws a PAGE field, so this slot shows the page number. */
+  pageNumber?: boolean;
+  /** 篇眉: the part asks for a rule under the text (`w:pBdr/w:bottom`). */
+  rule?: boolean;
+}
+
+/**
+ * The three header (or footer) slots a section can carry. `default` is the odd
+ * page's head once `<w:evenAndOddHeaders/>` is set, `first` needs `w:titlePg`.
+ */
+export interface RunningHeadSlots {
+  default?: RunningHead;
+  even?: RunningHead;
+  first?: RunningHead;
 }
 
 // ── Styles (shared) ────────────────────────────────────────
@@ -60,12 +156,28 @@ export interface ParagraphStyle {
   font: FontSettings;
   paragraph: ParagraphFormatting;
   lineSpacing?: number;
+  /**
+   * How `lineSpacing` must be read. `auto` counts 240ths of a line, while
+   * `exact` and `atLeast` are twips. OOXML keeps both numbers in the same
+   * `w:spacing/@w:line` attribute and puts the difference in `w:lineRule`, so
+   * dropping the rule silently reinterpreted every `exact` value as a multiple
+   * of the line height.
+   */
+  lineSpacingRule?: LineSpacingRule;
 }
 
+export type LineSpacingRule = 'auto' | 'exact' | 'atLeast';
+
+/**
+ * Run-level formatting. Every field is optional: a parsed template only
+ * declares what it actually specifies. The renderer fills the gaps from the
+ * semantic-role defaults, so "the template is silent" stays distinguishable
+ * from "the template explicitly asks for 12pt".
+ */
 export interface FontSettings {
-  name: string;
-  eastAsia: string;
-  size: number;         // half-points (24 = 12pt)
+  name?: string;
+  eastAsia?: string;
+  size?: number;        // half-points (24 = 12pt)
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
@@ -73,13 +185,26 @@ export interface FontSettings {
 }
 
 export interface ParagraphFormatting {
-  alignment: 'left' | 'center' | 'right' | 'justified' | 'distribute';
+  alignment?: 'left' | 'center' | 'right' | 'justified' | 'distribute';
   firstLineIndent?: number;
   leftIndent?: number;
   rightIndent?: number;
+  /**
+   * Twips of hanging indent: the first line starts this far left of the rest.
+   * The guide asks for it on every heading level (0.75 / 1 / 1.25 cm), which is
+   * a different property from `firstLineIndent` and was being thrown away.
+   */
+  hangingIndent?: number;
   spaceBefore?: number;
   spaceAfter?: number;
   outlineLevel?: number;
+  /**
+   * Start this paragraph on a fresh page. The guide requires a page break
+   * between chapters, and the template declares it on the chapter style —
+   * parsing kept the flag but the style mapping dropped it, so every chapter
+   * ran on from the previous one.
+   */
+  pageBreakBefore?: boolean;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -100,9 +225,30 @@ export type BlockType =
 
 export interface BaseBlock { type: BlockType; id?: string; }
 
+/**
+ * Semantic style roles. Every content block type doubles as a role, plus the
+ * parts of a document that carry no block of their own: table headers, figure
+ * and table captions, the headings of the front/back-matter sections (摘要,
+ * 目录, 附录, 致谢, 参考文献 — the guide sets these apart from a chapter heading),
+ * and the reference entries under one.
+ */
+export type StyleRole = BlockType
+  | 'table_header' | 'figure_caption' | 'table_caption'
+  | 'section_heading' | 'reference_item'
+  | 'cover_title' | 'cover_line' | 'cover_meta'
+  | 'toc_entry';
+
 export interface HeadingBlock extends BaseBlock {
   type: 'heading1' | 'heading2' | 'heading3' | 'heading4';
   text: string; number?: string;
+  /**
+   * Render this heading with another role's style.
+   *
+   * The guide sets the headings of the front and back matter (摘要, 目录, 附录,
+   * 致谢, 参考文献) apart from a chapter heading — 段后16.5磅 and 2.41倍行距
+   * against 段后17磅 and 1.3倍 — so a level-1 heading is not always a chapter.
+   */
+  styleRole?: StyleRole;
 }
 
 export interface ParagraphBlock extends BaseBlock {
@@ -113,6 +259,14 @@ export interface ParagraphBlock extends BaseBlock {
 export interface CenteredTextBlock extends BaseBlock {
   type: 'centered_text';
   text: string; font_size_pt?: number; bold?: boolean;
+  /**
+   * Use the template's style for this line instead of the block-level defaults.
+   *
+   * The cover page is specified box by box (校名行 小二 18pt bold, 研究生/指导教师
+   * 四号 bold at 1.5 line spacing, 中图分类号 五号), so the three tiers are roles
+   * of their own rather than one `centered_text` style.
+   */
+  styleRole?: 'cover_title' | 'cover_line' | 'cover_meta';
 }
 
 export interface EquationBlock extends BaseBlock {
@@ -338,22 +492,6 @@ export interface OfficialAttachment {
 }
 
 // ════════════════════════════════════════════════════════════
-// ── INLINE FORMATTING ──────────────────────────────────────
-// ════════════════════════════════════════════════════════════
-
-export interface InlineRange {
-  offset: number; length: number;
-  bold?: boolean; italic?: boolean;
-  underline?: boolean; superscript?: boolean; subscript?: boolean;
-  fontName?: string; fontSize?: number; color?: string;
-}
-
-export interface RichParagraph {
-  text: string;
-  ranges: InlineRange[];
-}
-
-// ════════════════════════════════════════════════════════════
 // ── LEGACY FORMAT ──────────────────────────────────────────
 // ════════════════════════════════════════════════════════════
 
@@ -365,4 +503,11 @@ export interface LegacyDocumentJSON {
 }
 
 export type OpenThesisDocument = ThesisDocument | JournalArticle | OfficialDocument;
+
+// ════════════════════════════════════════════════════════════
+// ── VALIDATION ─────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════
+
+export { validateDocument, validateLegacyDocument, assertValidDocument, formatIssues } from './validate.js';
+export type { ValidationIssue } from './validate.js';
 

@@ -1,6 +1,16 @@
 node_modules/
 dist/
-*.docx
 *.tsbuildinfo
 .env
 .debug
+
+# Generated documents — the engine's output.
+*.docx
+# …but templates and parser fixtures are inputs, and must be committable.
+!examples/**/*.docx
+!tests/fixtures/**/*.docx
+
+# `thesis init` writes these into the current directory.
+/thesis-content.json
+/journal-content.json
+/official-content.json

@@ -101,6 +101,13 @@ function extractFrontMatter(markdown: string): { body: string; frontMatter: Mark
   const closingIndex = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
   if (closingIndex < 0) return { body: normalized, frontMatter: {} };
 
+  // `---` is also a thematic break. Treating any later `---` as the end of a
+  // front-matter block deleted everything between the two whenever the leading
+  // line was not front matter at all — headings and prose included, silently.
+  if (!looksLikeFrontMatter(lines.slice(1, closingIndex))) {
+    return { body: normalized, frontMatter: {} };
+  }
+
   const frontMatter: MarkdownFrontMatter = {};
   for (let index = 1; index < closingIndex; index += 1) {
     const match = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(lines[index]);
@@ -114,12 +121,58 @@ function extractFrontMatter(markdown: string): { body: string; frontMatter: Mark
         parts.push(lines[index].trim());
       }
       frontMatter[key] = rawValue === '|' ? parts.join('\n') : parts.join(' ');
+    } else if (rawValue === '') {
+      // Block sequence:
+      //   keywords:
+      //     - alpha
+      //     - beta
+      // The key pattern only matches unindented `key:` lines, so these items
+      // used to be skipped entirely and the key silently became "".
+      const items: string[] = [];
+      let cursor = index + 1;
+      while (cursor < closingIndex) {
+        const item = /^\s+-\s+(.*)$/.exec(lines[cursor]);
+        if (!item) break;
+        const parsed = parseFrontMatterValue(item[1]);
+        items.push(typeof parsed === 'string' ? parsed : String(parsed));
+        cursor += 1;
+      }
+      if (items.length > 0) {
+        frontMatter[key] = items;
+        index = cursor - 1;
+      } else {
+        frontMatter[key] = '';
+      }
     } else {
       frontMatter[key] = parseFrontMatterValue(rawValue);
     }
   }
 
   return { body: lines.slice(closingIndex + 1).join('\n'), frontMatter };
+}
+
+/**
+ * Whether a `---`-delimited block really is front matter.
+ *
+ * It must hold at least one `key:` line and nothing that could not belong to
+ * one, its block-sequence items and indented scalar continuations aside. A
+ * `# comment` line is deliberately *not* accepted: in Markdown it is far more
+ * likely to be a heading between two thematic breaks, and accepting it would
+ * put the silent deletion back.
+ */
+function looksLikeFrontMatter(interior: string[]): boolean {
+  const meaningful = interior.filter(line => line.trim() !== '');
+  // `---\n---` is a deliberate empty block: there is nothing to lose.
+  if (meaningful.length === 0) return true;
+
+  let sawKey = false;
+  for (const line of meaningful) {
+    if (/^[A-Za-z][\w-]*:(\s|$)/.test(line)) { sawKey = true; continue; }
+    if (/^\s+-(\s|$)/.test(line)) continue;   // block sequence item
+    if (/^\s+\S/.test(line)) continue;        // folded or literal scalar continuation
+    return false;
+  }
+  return sawKey;
 }
 
 function parseFrontMatterValue(value: string): FrontMatterValue {
@@ -148,14 +201,19 @@ function tokenize(markdown: string): MarkdownItem[] {
       continue;
     }
 
-    const heading = /^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    // CommonMark only treats a trailing `#` run as a closing sequence when a
+    // space separates it from the text, so `# C#` keeps its `#`.
+    const heading = /^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
     if (heading) {
       items.push({ kind: 'heading', level: heading[1].length, text: cleanInline(heading[2]) });
       index += 1;
       continue;
     }
 
-    const fence = /^\s*(```+|~~~+)\s*([\w.+-]*)\s*$/.exec(line);
+    // The info string may carry more than a language token (`js title=x`);
+    // the old `[\w.+-]*` failed to match, so the opener became a paragraph and
+    // the closing fence then swallowed the rest of the document.
+    const fence = /^\s*(`{3,}|~{3,})[ \t]*([^\n]*)$/.exec(line);
     if (fence) {
       const code: string[] = [];
       const fenceMarker = fence[1][0];
@@ -169,7 +227,10 @@ function tokenize(markdown: string): MarkdownItem[] {
       continue;
     }
 
-    if (trimmed === '$$' || (trimmed.startsWith('$$') && !trimmed.endsWith('$$'))) {
+    // An opener carrying no second `$$` starts a multi-line block. `$$a=b$$
+    // trailing` is a complete equation, and reading it as an opener made the
+    // scan below swallow every following line up to the next `$$`.
+    if (trimmed === '$$' || (trimmed.startsWith('$$') && !trimmed.slice(2).includes('$$'))) {
       const equation: string[] = [];
       if (trimmed !== '$$') equation.push(trimmed.slice(2));
       index += 1;
@@ -184,8 +245,15 @@ function tokenize(markdown: string): MarkdownItem[] {
       items.push({ kind: 'block', block: { type: 'equation', latex: equation.join(' ').trim() } });
       continue;
     }
-    if (/^\$\$[\s\S]*\$\$$/.test(trimmed)) {
-      items.push({ kind: 'block', block: { type: 'equation', latex: trimmed.slice(2, -2).trim() } });
+    const displayMath = /^\$\$([\s\S]*?)\$\$(.*)$/.exec(trimmed);
+    if (displayMath) {
+      items.push({ kind: 'block', block: { type: 'equation', latex: displayMath[1].trim() } });
+      // Text after the closing `$$` is body text belonging to the paragraph that
+      // follows, not part of the equation.
+      const trailing = displayMath[2].trim();
+      if (trailing) {
+        items.push({ kind: 'block', block: { type: 'paragraph', text: cleanInline(trailing) } });
+      }
       index += 1;
       continue;
     }
@@ -223,7 +291,19 @@ function tokenize(markdown: string): MarkdownItem[] {
         data.push(headers.map((_, cellIndex) => row[cellIndex] ?? ''));
         index += 1;
       }
-      items.push({ kind: 'block', block: { type: 'table', caption: '', headers, data } });
+      // A caption line sits immediately above its table in most manuscripts.
+      // GFM has no caption syntax, so that paragraph *is* the caption — it used
+      // to be emitted as body text, which is why `表 3-1` came out 宋体 小四
+      // justified instead of the template's 黑体 五号 centred with 段前1行.
+      let caption = '';
+      const previous = items[items.length - 1];
+      if (previous?.kind === 'block' && previous.block.type === 'paragraph'
+          && /^(?:表|图)\s*[\dA-Za-z]/.test(previous.block.text)) {
+        // One space between the number and the title, however many the source had.
+        caption = previous.block.text.replace(/^((?:表|图)\s*[\dA-Za-z][\d.\-–—]*)\s+/, '$1 ');
+        items.pop();
+      }
+      items.push({ kind: 'block', block: { type: 'table', caption, headers, data } });
       continue;
     }
 
@@ -239,16 +319,29 @@ function tokenize(markdown: string): MarkdownItem[] {
 
     const listMatch = /^(\s*)([-+*]|\d+[.)])\s+(.+)$/.exec(line);
     if (listMatch) {
+      // Indent column of each open list level. Nesting is derived from where a
+      // marker actually sits, not from `floor(indent / 2)`: Markdown nests at
+      // 2 or 4 spaces and both used to land on the wrong level.
+      const openIndents: number[] = [];
+
       while (index < lines.length) {
         const item = /^(\s*)([-+*]|\d+[.)])\s+(.+)$/.exec(lines[index]);
         if (!item) break;
         const indentation = item[1].replace(/\t/g, '    ').length;
+
+        while (openIndents.length > 0 && indentation < openIndents[openIndents.length - 1]) {
+          openIndents.pop();
+        }
+        if (openIndents.length === 0 || indentation > openIndents[openIndents.length - 1]) {
+          openIndents.push(indentation);
+        }
+
         items.push({
           kind: 'block',
           block: {
             type: 'list_item',
             text: cleanInline(item[3]),
-            level: Math.floor(indentation / 2),
+            level: openIndents.length - 1,
             ordered: /^\d/.test(item[2]),
             marker: item[2],
           },
@@ -270,7 +363,65 @@ function tokenize(markdown: string): MarkdownItem[] {
     items.push({ kind: 'block', block: { type: 'paragraph', text: cleanInline(joinSoftLines(paragraph)) } });
   }
 
+  attachCaptionLines(items);
+
   return items;
+}
+
+/**
+ * A `表 N 标题` / `图 N 标题` line written as its own paragraph.
+ *
+ * The number and the title must be separated by one space, so a line that
+ * carries two (`表 2  40 m资格模型结果`) is normalised. Both 表3-1 and 表 3-1 are
+ * numbering an author chose, so the label keeps the shape it was written in. A
+ * body sentence that merely starts with the character (`图1表明…`) has no space
+ * after its number and is not a caption.
+ */
+const CAPTION_LINE = /^\s*([表图])([\s\u3000]*)([\dA-Za-z][\d.\-–—]*)[\s\u3000]+(\S[\s\S]*)$/;
+
+function captionLine(line: string): string | null {
+  const match = CAPTION_LINE.exec(line);
+  if (!match) return null;
+  const label = match[2] ? `${match[1]} ${match[3]}` : `${match[1]}${match[3]}`;
+  return `${label} ${match[4].trim()}`;
+}
+
+/**
+ * GFM has no caption syntax, so a manuscript writes 表题/图题 as a paragraph of
+ * their own. Attach each to the block it names — the table it precedes, the
+ * figure it follows — so the caption reaches its own style role, with the
+ * template's 段前/段后 and 黑体 五号 centred, instead of being rendered as body text.
+ *
+ * A table caption the tokenizer already absorbed is left alone, which keeps this
+ * pass idempotent.
+ */
+function attachCaptionLines(items: MarkdownItem[]): void {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item.kind !== 'block') continue;
+
+    if (item.block.type === 'table' && !item.block.caption) {
+      const previous = items[index - 1];
+      const title = previous?.kind === 'block' && previous.block.type === 'paragraph'
+        ? captionLine(previous.block.text)
+        : null;
+      if (title?.startsWith('表')) {
+        item.block.caption = title;
+        items.splice(index - 1, 1);
+        index -= 1;
+      }
+    } else if (item.block.type === 'figure') {
+      // An explicit 图题 line wins over the alt text, which is only a fallback.
+      const next = items[index + 1];
+      const title = next?.kind === 'block' && next.block.type === 'paragraph'
+        ? captionLine(next.block.text)
+        : null;
+      if (title?.startsWith('图')) {
+        item.block.caption = title;
+        items.splice(index + 1, 1);
+      }
+    }
+  }
 }
 
 function startsSpecialBlock(lines: string[], index: number): boolean {
@@ -290,7 +441,11 @@ function startsSpecialBlock(lines: string[], index: number): boolean {
 function isTableStart(lines: string[], index: number): boolean {
   if (index + 1 >= lines.length || !lines[index].includes('|')) return false;
   const separator = lines[index + 1].trim();
-  return /^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$/.test(separator);
+  // GFM allows single-column tables, so the repeated group is optional. The
+  // separator must still contain a pipe, otherwise `a | b` followed by `---`
+  // is a setext heading rather than a table.
+  if (!separator.includes('|')) return false;
+  return /^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?$/.test(separator);
 }
 
 function splitTableRow(line: string): string[] {
@@ -321,15 +476,36 @@ function createThesisDocument(
   metadata: MarkdownFrontMatter,
 ): ThesisDocument {
   const author = stringValue(metadata, 'author');
+  const supervisor = stringValue(metadata, 'supervisor');
   const department = stringValue(metadata, 'department', 'institution');
+  const major = stringValue(metadata, 'major');
+  const studentId = stringValue(metadata, 'studentId', 'student_id');
+  const degree = degreeValue(metadata.degree);
   const date = stringValue(metadata, 'date');
-  const cover: ContentBlock[] = [
-    { type: 'spacer', lines: 4 },
-    { type: 'centered_text', text: title, font_size_pt: 22, bold: true },
-  ];
-  if (author) cover.push({ type: 'centered_text', text: author, font_size_pt: 14 });
-  if (department) cover.push({ type: 'centered_text', text: department, font_size_pt: 14 });
-  if (date) cover.push({ type: 'centered_text', text: date, font_size_pt: 14 });
+  const titleEn = stringValue(metadata, 'titleEn', 'title_en');
+  const classificationNumber = stringValue(metadata, 'classificationNumber', 'classification_number');
+
+  const cover: ContentBlock[] = [];
+  if (classificationNumber) {
+    cover.push({ type: 'centered_text', text: `中图分类号：${classificationNumber}`, styleRole: 'cover_meta' });
+  }
+  const degreeText = degree === 'doctor' ? '北京科技大学博士学位论文' : '北京科技大学硕士学位论文';
+  cover.push(
+    { type: 'spacer', lines: 3 },
+    { type: 'centered_text', text: degreeText, styleRole: 'cover_title' },
+    { type: 'spacer', lines: 2 },
+    { type: 'centered_text', text: title, styleRole: 'cover_title' },
+  );
+  if (titleEn) {
+    cover.push({ type: 'centered_text', text: titleEn, styleRole: 'cover_line' });
+  }
+  cover.push({ type: 'spacer', lines: 3 });
+  if (studentId) cover.push({ type: 'centered_text', text: `学　　号：${studentId}`, styleRole: 'cover_line' });
+  if (author) cover.push({ type: 'centered_text', text: `研 究 生：${author}`, styleRole: 'cover_line' });
+  if (supervisor) cover.push({ type: 'centered_text', text: `指导教师：${supervisor}`, styleRole: 'cover_line' });
+  if (department) cover.push({ type: 'centered_text', text: `培养学院：${department}`, styleRole: 'cover_line' });
+  if (major) cover.push({ type: 'centered_text', text: `专　　业：${major}`, styleRole: 'cover_line' });
+  if (date) cover.push({ type: 'centered_text', text: `日　　期：${date}`, styleRole: 'cover_line' });
   cover.push({ type: 'page_break' });
 
   return {
@@ -387,9 +563,15 @@ function createOfficialDocument(
   metadata: MarkdownFrontMatter,
 ): OfficialDocument {
   const categoryValue = stringValue(metadata, 'documentCategory', 'category');
-  const documentCategory = OFFICIAL_CATEGORIES.includes(categoryValue as OfficialDocCategory)
-    ? categoryValue as OfficialDocCategory
-    : '通知';
+  // An unknown category used to become 通知 silently, so a notice with a
+  // mistyped category rendered as a different kind of document and no check
+  // could see it. An absent category still defaults; a wrong one is an error.
+  if (categoryValue !== undefined && !OFFICIAL_CATEGORIES.includes(categoryValue as OfficialDocCategory)) {
+    throw new Error(
+      `Unsupported official document category: ${categoryValue}. Expected one of: ${OFFICIAL_CATEGORIES.join(', ')}`,
+    );
+  }
+  const documentCategory = (categoryValue as OfficialDocCategory | undefined) ?? '通知';
   const body = items.map(item => item.kind === 'heading'
     ? ({ type: `heading${Math.min(item.level, 4)}`, text: item.text } as ContentBlock)
     : item.block);
@@ -511,12 +693,61 @@ function arrayValue(metadata: MarkdownFrontMatter, ...keys: string[]): string[] 
   return undefined;
 }
 
+/**
+ * Split a flow sequence on commas/semicolons, ignoring separators inside
+ * quotes. Splitting first and stripping quotes afterwards tore
+ * `["a, b", c]` into `'"a'`, `'b"'`, `'c'`.
+ */
 function splitList(value: string): string[] {
-  return value.split(/\s*[,;；]\s*/).map(stripQuotes).map(item => item.trim()).filter(Boolean);
+  const items: string[] = [];
+  let current = '';
+  let quote: string | null = null;
+
+  for (const character of value) {
+    if (quote) {
+      if (character === quote) quote = null;
+      current += character;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      current += character;
+    } else if (character === ',' || character === ';' || character === '；') {
+      items.push(current);
+      current = '';
+    } else {
+      current += character;
+    }
+  }
+  items.push(current);
+
+  return items.map(stripQuotes).map(item => item.trim()).filter(Boolean);
 }
 
+/**
+ * Spellings an author is likely to write for the three degree levels.
+ *
+ * Anything else is refused rather than dropped: `degree: PhD` used to become
+ * `undefined`, which JSON.stringify then removed, leaving no way to tell "the
+ * author wrote a doctorate" from "no degree was given".
+ */
+const DEGREE_ALIASES: Record<string, ThesisDocument['meta']['degree']> = {
+  bachelor: 'bachelor', bachelors: 'bachelor', bsc: 'bachelor', 'b.sc': 'bachelor',
+  undergraduate: 'bachelor', 本科: 'bachelor', 学士: 'bachelor',
+  master: 'master', masters: 'master', msc: 'master', 'm.sc': 'master', ma: 'master',
+  graduate: 'master', 硕士: 'master', 研究生: 'master',
+  doctor: 'doctor', doctorate: 'doctor', doctoral: 'doctor', phd: 'doctor',
+  'ph.d': 'doctor', 博士: 'doctor',
+};
+
 function degreeValue(value: FrontMatterValue | undefined): ThesisDocument['meta']['degree'] {
-  return value === 'bachelor' || value === 'master' || value === 'doctor' ? value : undefined;
+  if (value === undefined) return undefined;
+  const candidate = typeof value === 'string' ? value.trim().toLowerCase() : String(value);
+  const degree = DEGREE_ALIASES[candidate];
+  if (!degree) {
+    throw new Error(
+      `Unsupported degree: ${candidate}. Expected bachelor, master or doctor (or a common spelling such as PhD).`,
+    );
+  }
+  return degree;
 }
 
 function articleTypeValue(value: FrontMatterValue | undefined): JournalArticle['meta']['articleType'] {
@@ -536,10 +767,20 @@ function cleanInline(text: string): string {
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
-    .replace(/(\*\*|__)(.*?)\1/g, '$2')
-    .replace(/(\*|_)(.*?)\1/g, '$2')
-    .replace(/~~(.*?)~~/g, '$1')
-    .replace(/<[^>]+>/g, '')
+    // Emphasis has to actually be emphasis. The previous `(\*|_)(.*?)\1`
+    // treated any two delimiters as a pair, so `my_file_name` became
+    // `myfilename` and `2 * 3 * 4` became `2  3  4`. CommonMark does not treat
+    // intraword underscores as emphasis, and a delimiter followed by a space
+    // opens nothing — both rules are encoded here.
+    .replace(/\*\*(\S(?:[\s\S]*?\S)?)\*\*/g, '$1')
+    .replace(/__(\S(?:[\s\S]*?\S)?)__/g, '$1')
+    .replace(/\*(\S(?:[\s\S]*?\S)?)\*/g, '$1')
+    .replace(/(?<!\w)_(\S(?:[\s\S]*?\S)?)_(?!\w)/g, '$1')
+    .replace(/~~(\S(?:[\s\S]*?\S)?)~~/g, '$1')
+    // Keep autolink targets, and only drop things that are really tags:
+    // `<[^>]+>` also ate `a < b > c` and every `<https://…>` link.
+    .replace(/<((?:https?|mailto):[^>\s]+)>/gi, '$1')
+    .replace(/<\/?[A-Za-z][^>]*>/g, '')
     .replace(/\\([\\`*{}\[\]()#+.!_>-])/g, '$1')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')

@@ -9,7 +9,7 @@
 Prepare a fresh checkout:
 
 ```bash
-git clone https://github.com/1771902720-lgtm/OpenThesis.git
+git clone https://github.com/Gluxggg/OpenThesis.git
 cd OpenThesis
 pnpm install --frozen-lockfile
 pnpm build
@@ -83,13 +83,20 @@ For repository changes:
 ```bash
 pnpm check
 pnpm audit --prod --audit-level high
-python /root/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  .codex/skills/openthesis
+```
+
+If the skill-creator validation script is available in your environment, point it at the skill directory — its location differs per platform, so use your own path rather than a fixed one:
+
+```bash
+python <skill-creator>/scripts/quick_validate.py .codex/skills/openthesis
 ```
 
 Common failures:
 
 - `OpenThesis CLI is not built`: run `pnpm install --frozen-lockfile && pnpm build` in the repository root.
+- `Invalid document content — N problems`: `build` validates before rendering. Each line names a path such as `sections[0].content[2].headers`; fix all of them, then rebuild.
+- `Template: …` warnings: the parsed template is missing formatting or defines more sections than can be rendered. Re-parse the source `.docx`, or accept the built-in defaults.
 - Missing figure: make the path relative to the Markdown/JSON source file, or use an absolute path.
-- Wrong formatting: verify `-t` points to a template JSON parsed from the intended DOCX file.
+- Wrong formatting: verify `-t` points to a template JSON parsed from the intended DOCX file, and check the `thesis parse` warning list.
+- Lists: items are emitted as real Word numbering, so the marker comes from Word. Two lists separated by any other block restart at 1.
 - Advanced formula renders literally: native OMML covers fractions, roots, scripts, n-ary operators, functions, limits, accents, scalable delimiters, binomials, and common matrix/cases/aligned environments. Simplify user-defined macros, array column specifications, and uncommon AMS environments before building.

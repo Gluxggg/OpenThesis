@@ -67,7 +67,7 @@ A `.docx` file is a ZIP archive. The parser:
 
 ## Related
 
-- [OpenThesis](https://github.com/1771902720-lgtm/OpenThesis) — Full document template engine
+- [OpenThesis](https://github.com/Gluxggg/OpenThesis) — Full document template engine
 - [@openthesis/docx-renderer](https://www.npmjs.com/package/@openthesis/docx-renderer) — Render JSON → DOCX
 - [@openthesis/document-schema](https://www.npmjs.com/package/@openthesis/document-schema) — TypeScript type definitions
 

@@ -41,86 +41,234 @@ export function latexToMathAst(latex: string): LatexMathNode[] {
   return new LatexMathParser(latex).parse();
 }
 
-/**
- * Render a LaTeX equation string to OMML XML (native Word equation).
- * Uses pandoc for LaTeX → OMML conversion when available.
- * Falls back to Unicode plain-text when pandoc is not installed.
- */
-export function latexToOMML(latex: string): string {
-  // V2: Try pandoc OMML generation first
-  const omml = generateOMMLviaPandoc(latex);
-  if (omml) return omml;
-
-  // Fallback: Unicode plain-text conversion
-  return latexToPlainText(latex);
+export interface OmmlConversion {
+  /** OMML XML when pandoc produced it, otherwise Unicode plain text. */
+  value: string;
+  /** Which path produced `value`. */
+  source: 'pandoc' | 'unicode';
+  /** True when the Unicode fallback could not fully represent the input. */
+  lossy: boolean;
+  /** Why the pandoc path was unavailable, when it was. */
+  reason?: string;
 }
 
 /**
- * Render a LaTeX equation to plain Unicode text (V1 fallback).
- * Handles Greek letters, superscripts/subscripts, common operators.
+ * Convert LaTeX to OMML, reporting which path was taken.
+ *
+ * Prefer this over `latexToOMML` when the caller needs to know whether the
+ * result is native Office Math or a lossy approximation — the fallback used to
+ * be entirely silent.
+ */
+export function convertLatexToOmml(latex: string): OmmlConversion {
+  const pandoc = generateOMMLviaPandoc(latex);
+  if (pandoc.omml) {
+    return { value: pandoc.omml, source: 'pandoc', lossy: false };
+  }
+
+  const plain = latexToPlainText(latex);
+  return {
+    value: plain,
+    source: 'unicode',
+    lossy: isLossyConversion(latex, plain),
+    reason: pandoc.error,
+  };
+}
+
+/**
+ * Render a LaTeX equation string to OMML XML (native Word equation).
+ * Uses pandoc when available and falls back to Unicode plain text.
+ *
+ * The fallback cannot express everything; it warns when it is taken. Use
+ * `convertLatexToOmml` if the caller needs to inspect that programmatically.
+ */
+export function latexToOMML(latex: string): string {
+  const conversion = convertLatexToOmml(latex);
+  if (conversion.source === 'unicode') {
+    console.warn(
+      `No native Office Math for "${latex}"`
+      + `${conversion.reason ? ` (${conversion.reason})` : ''}; `
+      + `falling back to ${conversion.lossy ? 'lossy ' : ''}Unicode text.`,
+    );
+  }
+  return conversion.value;
+}
+
+/**
+ * The Unicode path cannot express environments, scalable delimiters, or any
+ * command it does not recognise — a surviving backslash is the tell.
+ */
+function isLossyConversion(latex: string, plain: string): boolean {
+  if (/\\[A-Za-z]+/.test(plain)) return true;
+  return /\\(?:begin|end|left|right)\b/.test(latex);
+}
+
+/**
+ * Command → Unicode, looked up by *exact* command name.
+ *
+ * The previous implementation ran an ordered chain of `.replace(/\\prod/g, …)`
+ * calls, so any command that is a prefix of another was corrupted:
+ * `\propto` became `Πto`, `\cdots` became `·s`, `\simeq` became `∼eq`.
+ * Matching `\\([A-Za-z]+)` and looking the whole name up removes that class of
+ * bug entirely, and unknown commands survive instead of being silently mangled.
+ */
+const PLAIN_TEXT_SYMBOLS: Record<string, string> = {
+  Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π',
+  Sigma: 'Σ', Upsilon: 'Υ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
+  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε',
+  zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'ϑ', iota: 'ι', kappa: 'κ',
+  lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ',
+  sigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ',
+  psi: 'ψ', omega: 'ω',
+  infty: '∞', partial: '∂', nabla: '∇',
+  propto: '∝', prod: 'Π', sum: 'Σ', int: '∫',
+  times: '×', cdot: '·', pm: '±', mp: '∓',
+  le: '≤', ge: '≥', leq: '≤', geq: '≥', ne: '≠', neq: '≠', approx: '≈',
+  in: '∈', notin: '∉', ni: '∋',
+  subset: '⊂', supset: '⊃', subseteq: '⊆', supseteq: '⊇',
+  equiv: '≡', sim: '∼', parallel: '∥', perp: '⊥',
+  sqrt: '√',
+};
+
+/** Read a balanced `{...}` group starting at `start` (which must be `{`). */
+function readBalancedGroup(text: string, start: number): { content: string; end: number } | null {
+  if (text[start] !== '{') return null;
+  let depth = 0;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '\\') { index += 1; continue; }
+    if (character === '{') depth += 1;
+    else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return { content: text.slice(start + 1, index), end: index + 1 };
+    }
+  }
+  return null;
+}
+
+/**
+ * Replace `\name{…}` (one or more balanced groups) with `transform(contents)`.
+ *
+ * A regex such as `/\\frac\{([^}]+)\}\{([^}]+)\}/` cannot match nested braces,
+ * so `\frac{a_{1}}{b}` was left as literal LaTeX and the subsequent brace
+ * cleanup turned it into `\fraca_1/b`.
+ */
+function replaceCommandGroups(
+  text: string,
+  names: string[],
+  groupCount: number,
+  transform: (contents: string[]) => string,
+): string {
+  // Longest name first, or `text` would match before `textrm`.
+  const alternation = [...names].sort((a, b) => b.length - a.length).join('|');
+  const pattern = new RegExp(`\\\\(?:${alternation})`, 'g');
+
+  let result = '';
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    let position = match.index + match[0].length;
+    const contents: string[] = [];
+    let complete = true;
+
+    for (let group = 0; group < groupCount; group += 1) {
+      while (text[position] === ' ') position += 1;
+      const balanced = readBalancedGroup(text, position);
+      if (!balanced) { complete = false; break; }
+      contents.push(balanced.content);
+      position = balanced.end;
+    }
+    if (!complete) continue;
+
+    result += text.slice(cursor, match.index) + transform(contents);
+    cursor = position;
+    pattern.lastIndex = position;
+  }
+
+  return result + text.slice(cursor);
+}
+
+/**
+ * Convert `^{…}` / `_{…}` (and the bare `^x` / `_x` forms) to Unicode.
+ * The bare form was previously left as a literal caret/underscore.
+ */
+function replaceScripts(text: string): string {
+  let result = '';
+  let index = 0;
+
+  while (index < text.length) {
+    const character = text[index];
+    if (character === '^' || character === '_') {
+      const map = character === '^' ? SUPERSCRIPTS : SUBSCRIPTS;
+      if (text[index + 1] === '{') {
+        const balanced = readBalancedGroup(text, index + 1);
+        if (balanced) {
+          result += charMap(balanced.content, map);
+          index = balanced.end;
+          continue;
+        }
+      }
+      const next = text[index + 1];
+      if (next !== undefined && /[0-9A-Za-z+\-=()]/.test(next)) {
+        result += map[next] ?? next;
+        index += 2;
+        continue;
+      }
+    }
+    result += character;
+    index += 1;
+  }
+
+  return result;
+}
+
+/**
+ * Render a LaTeX equation to plain Unicode text (fallback when pandoc and the
+ * native OMML path are unavailable).
  */
 export function latexToPlainText(latex: string): string {
-  let result = latex
-    // Greek letters (uppercase)
-    .replace(/\\Gamma/g, 'Γ').replace(/\\Delta/g, 'Δ')
-    .replace(/\\Theta/g, 'Θ').replace(/\\Lambda/g, 'Λ')
-    .replace(/\\Xi/g, 'Ξ').replace(/\\Pi/g, 'Π')
-    .replace(/\\Sigma/g, 'Σ').replace(/\\Upsilon/g, 'Υ')
-    .replace(/\\Phi/g, 'Φ').replace(/\\Psi/g, 'Ψ')
-    .replace(/\\Omega/g, 'Ω')
-    // Greek letters (lowercase)
-    .replace(/\\alpha/g, 'α').replace(/\\beta/g, 'β')
-    .replace(/\\gamma/g, 'γ').replace(/\\delta/g, 'δ')
-    .replace(/\\epsilon/g, 'ε').replace(/\\varepsilon/g, 'ε')
-    .replace(/\\zeta/g, 'ζ').replace(/\\eta/g, 'η')
-    .replace(/\\theta/g, 'θ').replace(/\\vartheta/g, 'ϑ')
-    .replace(/\\iota/g, 'ι').replace(/\\kappa/g, 'κ')
-    .replace(/\\lambda/g, 'λ').replace(/\\mu/g, 'μ')
-    .replace(/\\nu/g, 'ν').replace(/\\xi/g, 'ξ')
-    .replace(/\\pi/g, 'π').replace(/\\rho/g, 'ρ')
-    .replace(/\\sigma/g, 'σ').replace(/\\tau/g, 'τ')
-    .replace(/\\upsilon/g, 'υ').replace(/\\phi/g, 'φ')
-    .replace(/\\varphi/g, 'φ').replace(/\\chi/g, 'χ')
-    .replace(/\\psi/g, 'ψ').replace(/\\omega/g, 'ω')
-    // Common operators & relations
-    .replace(/\\infty/g, '∞').replace(/\\partial/g, '∂')
-    .replace(/\\nabla/g, '∇').replace(/\\int/g, '∫')
-    .replace(/\\sum/g, 'Σ').replace(/\\prod/g, 'Π')
-    .replace(/\\sqrt/g, '√').replace(/\\propto/g, '∝')
-    .replace(/\\times/g, '×').replace(/\\cdot/g, '·')
-    .replace(/\\pm/g, '±').replace(/\\mp/g, '∓')
-    .replace(/\\leq/g, '≤').replace(/\\geq/g, '≥')
-    .replace(/\\neq/g, '≠').replace(/\\approx/g, '≈')
-    .replace(/\\equiv/g, '≡').replace(/\\sim/g, '∼')
-    .replace(/\\parallel/g, '∥').replace(/\\perp/g, '⊥')
-    // Fractions, text styling
-    .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1)/($2)')
-    .replace(/\\text\{([^}]+)\}/g, '$1')
-    .replace(/\\mathrm\{([^}]+)\}/g, '$1')
-    .replace(/\\mathbf\{([^}]+)\}/g, '$1')
-    .replace(/\\mathit\{([^}]+)\}/g, '$1')
-    // Bars, hats, dots
-    .replace(/\\bar\{([^}]+)\}/g, '$1̄')
-    .replace(/\\hat\{([^}]+)\}/g, '$1̂')
-    .replace(/\\dot\{([^}]+)\}/g, '$1̇')
-    .replace(/\\ddot\{([^}]+)\}/g, '$1̈')
-    .replace(/\\tilde\{([^}]+)\}/g, '$1̃')
-    .replace(/\\vec\{([^}]+)\}/g, '$1⃗')
-    // Norm: \|...\| → ‖...‖
+  // `\text{…}` keeps its spaces, and the whitespace that follows such a group
+  // sits in math mode where it is insignificant. Pulling the groups out lets
+  // the restore step below drop exactly that one following space, instead of
+  // turning `\text{if } x>0` into `if  x>0`.
+  const literals: string[] = [];
+  let result = replaceCommandGroups(latex, ['text', 'textrm'], 1, ([content]) => {
+    literals.push(content);
+    return `\u0000${literals.length - 1}\u0000`;
+  });
+
+  // Structural commands, with brace-aware matching.
+  result = replaceCommandGroups(result, ['frac', 'dfrac', 'tfrac'], 2, ([numerator, denominator]) => `(${numerator})/(${denominator})`);
+  result = replaceCommandGroups(result, ['sqrt'], 1, ([content]) => `√(${content})`);
+  result = replaceCommandGroups(result, ['mathrm', 'mathbf', 'mathit'], 1, ([content]) => content);
+  result = replaceCommandGroups(result, ['bar'], 1, ([content]) => `${content}̄`);
+  result = replaceCommandGroups(result, ['hat'], 1, ([content]) => `${content}̂`);
+  result = replaceCommandGroups(result, ['dot'], 1, ([content]) => `${content}̇`);
+  result = replaceCommandGroups(result, ['ddot'], 1, ([content]) => `${content}̈`);
+  result = replaceCommandGroups(result, ['tilde'], 1, ([content]) => `${content}̃`);
+  result = replaceCommandGroups(result, ['vec'], 1, ([content]) => `${content}⃗`);
+
+  result = replaceScripts(result);
+
+  // Exact-name symbol lookup — no prefix collisions.
+  result = result.replace(/\\([A-Za-z]+)/g, (match: string, name: string) => PLAIN_TEXT_SYMBOLS[name] ?? match);
+
+  result = result
     .replace(/\\\|/g, '‖')
-    // Superscript with braces
-    .replace(/\^\{([^}]+)\}/g, (_: string, p1: string) => charMap(p1, SUPERSCRIPTS))
-    // Subscript with braces — handles multi-char like _{n+1}, _{max}
-    .replace(/_\{([^}]+)\}/g, (_: string, p1: string) => charMap(p1, SUBSCRIPTS))
-    // Clean up remaining braces
-    .replace(/[{}]/g, '')
-    // Spaces around operators
     .replace(/\\,/g, ' ')
     .replace(/\\;/g, '  ')
     .replace(/\\quad/g, '    ')
     .replace(/\\qquad/g, '        ')
-    .trim();
-  return result;
+    .replace(/[{}]/g, '');
+
+  // Restore the verbatim text groups, dropping the insignificant space that
+  // follows one when the literal already ends with its own space.
+  result = result.replace(/\u0000(\d+)\u0000([ \t]*)/g, (_match, index: string, trailing: string) => {
+    const literal = literals[Number(index)] ?? '';
+    return /\s$/.test(literal) ? literal : literal + trailing;
+  });
+
+  return result.trim();
 }
 
 /**
@@ -159,8 +307,10 @@ class LatexMathParser {
         const marker = this.source[this.index];
         this.index += 1;
         const value = this.parseScriptValue();
-        if (marker === '_') subScript = value;
-        else superScript = value;
+        // `x^{a}^{b}` is malformed LaTeX (double superscript). Keep the first
+        // rather than silently discarding it.
+        if (marker === '_') subScript ??= value;
+        else superScript ??= value;
         this.skipWhitespace();
       }
 
@@ -231,7 +381,12 @@ class LatexMathParser {
       return [{ type: 'function', name: command, children: this.parseFunctionArgument() }];
     }
     if (command === 'operatorname') {
-      const name = this.readRequiredGroupText();
+      // `\operatorname*{argmax}` is the same command with a star; without this
+      // the star was read as the group and the name came back empty.
+      if (this.source[this.index] === '*') this.index += 1;
+      // Spacing macros inside the name (`\operatorname{arg\,max}`) are layout,
+      // not part of the operator's text.
+      const name = this.readRequiredGroupText().replace(/\\[,;:!\s]+/g, '');
       return [{ type: 'function', name, children: this.parseFunctionArgument() }];
     }
     if (command === 'binom') {
@@ -249,6 +404,17 @@ class LatexMathParser {
         under: command === 'underset' ? annotation : undefined,
       }];
     }
+    if (command === 'xrightarrow' || command === 'xleftarrow') {
+      const under = this.parseOptionalGroup('[', ']');
+      const over = this.parseRequiredGroup();
+      const arrow = command === 'xrightarrow' ? '→' : '←';
+      return [{
+        type: 'overUnder',
+        base: [{ type: 'run', text: arrow }],
+        over,
+        under,
+      }];
+    }
     if (command in ACCENT_COMMANDS) {
       return [{ type: 'accent', accent: ACCENT_COMMANDS[command], children: this.parseRequiredGroup() }];
     }
@@ -264,7 +430,12 @@ class LatexMathParser {
       const environment = this.readRequiredGroupText();
       return [this.parseEnvironment(environment)];
     }
-    if (['text', 'textrm', 'mathrm', 'mathbf', 'mathit'].includes(command)) {
+    if (command === 'text' || command === 'textrm') {
+      // Verbatim text: spaces are content here. Running it through the math
+      // parser dropped them, so `\text{if } x>0` rendered as "ifx>0".
+      return [{ type: 'run', text: this.readRequiredGroupText(false) }];
+    }
+    if (command === 'mathrm' || command === 'mathbf' || command === 'mathit' || command === 'boldsymbol' || command === 'bm') {
       return this.parseRequiredGroup();
     }
     if (command === ',' || command === ':' || command === ';' || command === 'quad') {
@@ -273,7 +444,15 @@ class LatexMathParser {
     if (command === 'qquad') return [{ type: 'run', text: '        ' }];
     if (command === '!' || command === ' ') return [];
 
-    return [{ type: 'run', text: MATH_SYMBOLS[command] ?? command }];
+    const symbol = MATH_SYMBOLS[command];
+    if (symbol !== undefined) return [{ type: 'run', text: symbol }];
+
+    // A single non-letter command is an escaped literal (`\%`, `\{`, `\\`).
+    if (!/^[A-Za-z]+$/.test(command)) return [{ type: 'run', text: command }];
+
+    // An unknown command keeps its backslash, so it renders as visibly
+    // unsupported instead of silently becoming a bare identifier.
+    return [{ type: 'run', text: `\\${command}` }];
   }
 
   private parseRequiredGroup(): LatexMathNode[] {
@@ -317,7 +496,11 @@ class LatexMathParser {
       : base;
   }
 
-  private readRequiredGroupText(): string {
+  /**
+   * Read a `{...}` group as raw text.
+   * `trim` is off for `\text{…}`, where leading/trailing spaces are content.
+   */
+  private readRequiredGroupText(trim = true): string {
     this.skipWhitespace();
     if (this.source[this.index] !== '{') return '';
     this.index += 1;
@@ -328,13 +511,17 @@ class LatexMathParser {
       else if (this.source[this.index] === '}') depth -= 1;
       this.index += 1;
     }
-    return this.source.slice(start, depth === 0 ? this.index - 1 : this.index).trim();
+    const text = this.source.slice(start, depth === 0 ? this.index - 1 : this.index);
+    return trim ? text.trim() : text;
   }
 
   private parseLeftRight(): LatexMathNode {
     const opening = this.readDelimiterToken();
     const start = this.index;
-    const marker = /\\(left|right)\s*/g;
+    // `(?![A-Za-z])` keeps `\leftarrow` / `\rightarrow` from being mistaken for
+    // `\left` / `\right`: the bare prefix match consumed the real closer and
+    // made the delimiter swallow the rest of the equation.
+    const marker = /\\(left|right)(?![A-Za-z])\s*/g;
     marker.lastIndex = start;
     let depth = 0;
     let bodyEnd = this.source.length;
@@ -391,9 +578,12 @@ class LatexMathParser {
     while ((match = marker.exec(this.source))) {
       if (match[1] === 'begin') depth += 1;
       else depth -= 1;
-      if (depth === 0 && match[2].trim() === name) {
+      if (depth === 0) {
         const body = this.source.slice(start, match.index);
-        this.index = marker.lastIndex;
+        // Only consume the `\end` when it closes the environment we opened.
+        // A mismatched name used to keep scanning to EOF and swallow the whole
+        // remainder of the equation into this node.
+        this.index = match[2].trim() === name ? marker.lastIndex : match.index;
         return body;
       }
     }
@@ -429,9 +619,16 @@ const MATH_SYMBOLS: Record<string, string> = {
   lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ',
   tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
   infinity: '∞', infty: '∞', partial: '∂', nabla: '∇', prod: '∏',
-  propto: '∝', times: '×', cdot: '·', pm: '±', mp: '∓', leq: '≤', geq: '≥',
-  neq: '≠', approx: '≈', equiv: '≡', sim: '∼', parallel: '∥', perp: '⊥',
+  propto: '∝', times: '×', cdot: '·', pm: '±', mp: '∓', div: '÷',
+  ast: '∗', star: '⋆', circ: '∘', bullet: '•',
+  le: '≤', ge: '≥', leq: '≤', geq: '≥', ne: '≠', neq: '≠', approx: '≈',
+  in: '∈', notin: '∉', ni: '∋',
+  subset: '⊂', supset: '⊃', subseteq: '⊆', supseteq: '⊇',
+  cap: '∩', cup: '∪', forall: '∀', exists: '∃', neg: '¬',
+  ll: '≪', gg: '≫',
+  equiv: '≡', sim: '∼', parallel: '∥', perp: '⊥',
   to: '→', rightarrow: '→', leftarrow: '←', Rightarrow: '⇒', Leftarrow: '⇐',
+  leftrightarrow: '↔', Leftrightarrow: '⇔',
   ldots: '…', cdots: '⋯', ell: 'ℓ', hbar: 'ℏ', Re: 'ℜ', Im: 'ℑ',
 };
 
@@ -439,6 +636,7 @@ const FUNCTION_COMMANDS = new Set([
   'sin', 'cos', 'tan', 'cot', 'sec', 'csc',
   'sinh', 'cosh', 'tanh', 'log', 'ln', 'exp',
   'det', 'gcd', 'ker', 'arg', 'deg', 'dim', 'hom',
+  'sgn', 'diag', 'rank', 'tr',
 ]);
 
 const LIMIT_COMMANDS = new Set(['lim', 'min', 'max', 'inf', 'sup']);
@@ -461,6 +659,20 @@ const MATRIX_DELIMITERS: Record<MatrixEnvironment, readonly [string, string]> = 
   matrix: ['', ''], pmatrix: ['(', ')'], bmatrix: ['[', ']'], Bmatrix: ['{', '}'],
   vmatrix: ['|', '|'], Vmatrix: ['‖', '‖'], cases: ['{', ''], aligned: ['', ''],
 };
+
+/**
+ * True when the character at `index` is escaped by a preceding backslash.
+ *
+ * Only an *odd* run of backslashes escapes: `\&` is a literal ampersand, while
+ * the `&` in `\\&` follows a row break and is a real cell separator. Testing
+ * just the previous character read the second case as an escape and merged two
+ * cells into one.
+ */
+function isEscaped(source: string, index: number): boolean {
+  let backslashes = 0;
+  for (let scan = index - 1; scan >= 0 && source[scan] === '\\'; scan -= 1) backslashes += 1;
+  return backslashes % 2 === 1;
+}
 
 function splitEnvironmentRows(source: string): string[][] {
   const rows: string[][] = [];
@@ -486,7 +698,7 @@ function splitEnvironmentRows(source: string): string[][] {
     if (character === '{') braceDepth += 1;
     else if (character === '}' && braceDepth > 0) braceDepth -= 1;
 
-    if (braceDepth === 0 && environmentDepth === 0 && character === '&' && source[index - 1] !== '\\') {
+    if (braceDepth === 0 && environmentDepth === 0 && character === '&' && !isEscaped(source, index)) {
       pushCell();
       continue;
     }
@@ -507,7 +719,13 @@ function splitEnvironmentRows(source: string): string[][] {
 
 // ── OMML generation via pandoc ────────────────────────────
 
-function generateOMMLviaPandoc(latex: string): string | null {
+/** Result of the pandoc attempt: either OMML, or why it could not be produced. */
+interface PandocResult {
+  omml?: string;
+  error?: string;
+}
+
+function generateOMMLviaPandoc(latex: string): PandocResult {
   let mdPath: string | undefined;
   let docxPath: string | undefined;
   try {
@@ -532,10 +750,12 @@ function generateOMMLviaPandoc(latex: string): string | null {
 
     // Extract OMML from the generated DOCX
     const omml = extractOMML(docxPath);
-
-    return omml;
-  } catch {
-    return null;  // pandoc not available, fall back to Unicode
+    return omml ? { omml } : { error: 'pandoc produced no <m:oMath> element' };
+  } catch (error: unknown) {
+    // Report why: "pandoc is not installed" and "pandoc failed on this input"
+    // need different responses from the caller.
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: message.split('\n')[0] };
   } finally {
     for (const path of [mdPath, docxPath]) {
       if (path && existsSync(path)) {
