@@ -196,3 +196,23 @@ test('rejects a degree outside the schema vocabulary', () => {
   good.meta.degree = 'doctor';
   assert.deepEqual(validateDocument(good), []);
 });
+
+// ── Regression: the fixes from the follow-up audit ───────────
+
+test('reports a table with no caption instead of letting the renderer crash on it', () => {
+  // `TableBlock.caption` is required by the schema, but `validateTable` only
+  // looked at headers and data. An uncaptioned table passed validation and then
+  // threw inside the renderer with
+  // `Cannot read properties of undefined (reading 'trim')`.
+  const missing = validThesis();
+  delete missing.sections[0].content[1].caption;
+  const issues = validateDocument(missing);
+  assert.deepEqual(issues.map(issue => issue.path), ['sections[0].content[1].caption']);
+  assert.match(issues[0].message, /must be a string/);
+
+  // An empty caption is a legitimate "no caption" and stays valid: the renderer
+  // emits no caption paragraph for it, which `examples/sample-thesis.md` relies on.
+  const empty = validThesis();
+  empty.sections[0].content[1].caption = '';
+  assert.deepEqual(validateDocument(empty), []);
+});

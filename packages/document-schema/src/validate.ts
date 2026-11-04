@@ -396,6 +396,19 @@ function validateBlock(value: unknown, path: string, report: Report): void {
 }
 
 function validateTable(value: Record<string, unknown>, path: string, report: Report): void {
+  // `TableBlock` declares `caption: string` required, but nothing enforced it:
+  // a table without one passed validation and then crashed inside the renderer
+  // with `Cannot read properties of undefined (reading 'trim')`. A required
+  // field that the validator skips is a required field that is not required.
+  //
+  // An *empty* caption is deliberately allowed: the renderer treats it as "this
+  // table has no caption" and emits no caption paragraph, which is what
+  // `examples/sample-thesis.md` relies on. Only a missing or non-string caption
+  // is a defect.
+  if (typeof value.caption !== 'string') {
+    report(`${path}.caption`, `must be a string, received ${describe(value.caption)}`);
+  }
+
   const headers = value.headers;
   if (!isStringArray(headers)) {
     report(`${path}.headers`, `must be an array of strings, received ${describe(headers)}`);

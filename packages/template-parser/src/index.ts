@@ -92,8 +92,13 @@ export async function parseTemplate(
   const docXml = await zip.file('word/document.xml')?.async('string');
   const documentSettings = await readDocumentSettings(zip, parser);
   const runningHeads = await readRunningHeadParts(zip, parser);
-  const pageSections = docXml
-    ? extractPageSections(parser.parse(normalizeWordPrefix(docXml)), runningHeads, documentSettings)
+  // Normalise the prefix once and share the tree: a document binds the
+  // WordprocessingML namespace to whatever prefix it likes, and the usage
+  // counter used to scan the *raw* string for `<w:pStyle`, which found nothing
+  // in a document bound to another prefix. Both readers now see one tree.
+  const parsedDocument = docXml ? parser.parse(normalizeWordPrefix(docXml)) : undefined;
+  const pageSections = parsedDocument
+    ? extractPageSections(parsedDocument, runningHeads, documentSettings)
     : [];
   const pageSettings = pageSections.length > 0
     ? pageSections[pageSections.length - 1]
@@ -101,7 +106,7 @@ export async function parseTemplate(
 
   // 4. Map styles to semantic roles (heuristic detection), and record which
   // style wins each role. See `pickRoleWinners`.
-  const usage = countStyleUsage(docXml);
+  const usage = countStyleUsageFromTree(parsedDocument);
   const { roles: styleRoles, explicit } = detectStyleRoles(resolvedStyles, Object.keys(rawStyles));
   const roleWinners = pickRoleWinners(styleRoles, usage, explicit);
 
@@ -301,18 +306,22 @@ function extractParagraphProps(pPr: any, runSize?: number): RawParagraphProps | 
 
   const props: RawParagraphProps = {};
 
+  // `*Chars` (indent) and `*Lines` (spacing) are hundredths of a unit, not
+  // twips. Converting needs the run size: twips = units × halfPoints / 10 — two
+  // characters at 12pt is 480 twips, and one 12pt line is 240.
+  const effectiveSize = runSize && runSize > 0 ? runSize : 24; // 12pt fallback
+  const unitsToTwips = (units: number) => Math.round((units * effectiveSize) / 10);
+
   // Alignment
   const jc = pPr['w:jc']?.['@_w:val'];
   if (jc) props.alignment = jc;
 
   // Indentation. `w:firstLineChars` / `w:leftChars` / `w:rightChars` are
   // hundredths of a *character*, not twips, and Chinese templates emit them
-  // constantly. Converting needs the run size: twips = chars × halfPoints / 10.
+  // constantly.
   const ind = pPr['w:ind'];
   if (ind) {
     props.indent = {};
-    const effectiveSize = runSize && runSize > 0 ? runSize : 24; // 12pt fallback
-    const charsToTwips = (chars: number) => Math.round((chars * effectiveSize) / 10);
 
     const firstLine = parseInt(ind['@_w:firstLine']);
     const firstLineChars = parseInt(ind['@_w:firstLineChars']);
@@ -325,13 +334,13 @@ function extractParagraphProps(pPr: any, runSize?: number): RawParagraphProps | 
     // twips value beside it is derived from whatever size the paragraph had at
     // the time, so it goes stale — two characters at 12pt is 480 twips, not the
     // 200 Word left behind. `w:leftChars` / `w:rightChars` behave the same way.
-    if (!isNaN(firstLineChars)) props.indent.firstLine = charsToTwips(firstLineChars);
+    if (!isNaN(firstLineChars)) props.indent.firstLine = unitsToTwips(firstLineChars);
     else if (!isNaN(firstLine)) props.indent.firstLine = firstLine;
 
-    if (!isNaN(leftChars)) props.indent.left = charsToTwips(leftChars);
+    if (!isNaN(leftChars)) props.indent.left = unitsToTwips(leftChars);
     else if (!isNaN(left)) props.indent.left = left;
 
-    if (!isNaN(rightChars)) props.indent.right = charsToTwips(rightChars);
+    if (!isNaN(rightChars)) props.indent.right = unitsToTwips(rightChars);
     else if (!isNaN(right)) props.indent.right = right;
 
     // A hanging indent is separate from a first-line indent and was dropped
@@ -340,15 +349,23 @@ function extractParagraphProps(pPr: any, runSize?: number): RawParagraphProps | 
     if (!isNaN(hanging)) props.indent.hanging = hanging;
   }
 
-  // Spacing
+  // Spacing. `w:beforeLines` / `w:afterLines` are hundredths of a line and are
+  // what Chinese Word/WPS templates write for 段前 / 段后; reading only
+  // `w:before` / `w:after` dropped them, so a style that declared 段前0.5行
+  // parsed as declaring no spacing at all. As with the `*Chars` attributes, the
+  // line-based value is the live one and wins over the twips beside it.
   const spacing = pPr['w:spacing'];
   if (spacing) {
     props.spacing = {};
     const before = parseInt(spacing['@_w:before']);
+    const beforeLines = parseInt(spacing['@_w:beforeLines']);
     const after = parseInt(spacing['@_w:after']);
+    const afterLines = parseInt(spacing['@_w:afterLines']);
     const line = parseInt(spacing['@_w:line']);
-    if (!isNaN(before)) props.spacing.before = before;
-    if (!isNaN(after)) props.spacing.after = after;
+    if (!isNaN(beforeLines)) props.spacing.before = unitsToTwips(beforeLines);
+    else if (!isNaN(before)) props.spacing.before = before;
+    if (!isNaN(afterLines)) props.spacing.after = unitsToTwips(afterLines);
+    else if (!isNaN(after)) props.spacing.after = after;
     if (!isNaN(line)) {
       props.spacing.line = line;
       props.spacing.lineRule = spacing['@_w:lineRule'] || 'auto';
@@ -501,7 +518,12 @@ function mergeStyles(base: RawStyle, override: RawStyle): RawStyle {
     styleId: override.styleId,  // keep the override's ID
     name: override.name || base.name,
     pPr: mergeParagraphProps(base.pPr, override.pPr),
-    rPr: { ...base.rPr, ...override.rPr },
+    // Two absent run-property bags stay absent. Spreading them unconditionally
+    // produced `rPr: {}` on every style, which made a template that declares no
+    // typography look like one that declares some — Word writes an empty
+    // `w:docDefaults/w:rPrDefault/w:rPr` into every file, so the "carries no
+    // typography" warning could never fire.
+    rPr: mergeRunProps(base.rPr, override.rPr),
   };
 }
 
@@ -1076,14 +1098,57 @@ function detectStyleRoles(
   return { roles, explicit };
 }
 
-/** How often each paragraph style is applied in `document.xml`. */
-function countStyleUsage(docXml?: string): Map<string, number> {
+/**
+ * How often each paragraph style is applied in a `document.xml`, given the
+ * already-parsed part.
+ *
+ * Read from the tree, not from the raw XML. The prefix a document binds
+ * WordprocessingML to is arbitrary, so a scan for the literal `<w:pStyle`
+ * found zero uses in a document that binds another prefix — and every role then
+ * tied at zero, with the winner decided by declaration order instead of by
+ * what the document actually applies.
+ */
+function countStyleUsageFromTree(document?: unknown): Map<string, number> {
   const usage = new Map<string, number>();
-  if (!docXml) return usage;
-  for (const match of docXml.matchAll(/<w:pStyle[^>]*w:val="([^"]*)"/g)) {
-    usage.set(match[1], (usage.get(match[1]) ?? 0) + 1);
+  if (!document) return usage;
+
+  for (const value of collectTagNodes(document, 'w:pStyle')) {
+    for (const node of asArray(value as any) as any[]) {
+      const id = node?.['@_w:val'];
+      if (id === undefined || id === null) continue;
+      const key = String(id);
+      usage.set(key, (usage.get(key) ?? 0) + 1);
+    }
   }
   return usage;
+}
+
+/**
+ * How often each paragraph style is applied in a `document.xml`, given its text.
+ *
+ * The public entry point. It keeps its `string` signature so existing callers
+ * do not break, and normalises the prefix before parsing so it is correct on a
+ * document that binds another one. `parseTemplate` does not call this — it
+ * hands the tree it has already parsed to `countStyleUsageFromTree` rather than
+ * paying for a second parse of a multi-megabyte part.
+ */
+function countStyleUsage(docXml?: string): Map<string, number> {
+  if (!docXml) return new Map();
+  return countStyleUsageFromTree(createParser().parse(normalizeWordPrefix(docXml)));
+}
+
+/** Every node stored under one tag in a parsed part, in document order. */
+function collectTagNodes(node: unknown, tag: string, out: unknown[] = []): unknown[] {
+  if (!node || typeof node !== 'object') return out;
+  if (Array.isArray(node)) {
+    for (const item of node) collectTagNodes(item, tag, out);
+    return out;
+  }
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (key === tag) out.push(value);
+    else collectTagNodes(value, tag, out);
+  }
+  return out;
 }
 
 /**

@@ -26,7 +26,6 @@ import type {
   ThesisDocument,
   ThesisSection,
   JournalArticle,
-  JournalSection,
   OfficialDocument,
   ContentBlock,
   ParagraphStyle,
@@ -67,8 +66,15 @@ const _dirname = dirname(_filename);
 // ── Renderer Config ───────────────────────────────────────
 
 export interface RenderOptions {
-  /** Path to write the output .docx */
-  outputPath: string;
+  /**
+   * Path to write the output .docx.
+   *
+   * Optional: omitting it (or passing an empty string) renders the buffer and
+   * writes nothing, which is how the tests and the library API use it. The type
+   * used to declare it required while every caller treated it as optional and
+   * the implementation guarded it with `if (options.outputPath)`.
+   */
+  outputPath?: string;
   /** Parsed template (from template-parser) */
   template: DocumentTemplate;
   /** Content to render */
@@ -239,6 +245,22 @@ function definedOnly<T extends object>(value: T | undefined): Partial<T> {
 }
 
 /**
+ * Resolved-style cache, keyed by the template object it was derived from.
+ *
+ * `resolveStyle` runs at least once per block and three times per table, and it
+ * used to derive the same `ParagraphStyle` every time: a `for…in` over the
+ * template's role table for every role without a recorded winner (the shipped
+ * template records 12 of 48), then two `Object.entries`/`fromEntries` merges and
+ * four spreads. The result depends only on (template, role, docType), and all
+ * three are fixed for the duration of a render, so it is cached.
+ *
+ * A `WeakMap` keeps entries from outliving their template, and `renderDocument`
+ * drops its template's entry before it starts, so a template mutated between
+ * renders is still read fresh.
+ */
+const STYLE_CACHE = new WeakMap<DocumentTemplate, Map<string, ParagraphStyle>>();
+
+/**
  * Resolve the effective ParagraphStyle for a semantic role.
  *
  * The template wins for every property it actually declares; properties it
@@ -247,6 +269,20 @@ function definedOnly<T extends object>(value: T | undefined): Partial<T> {
  * produce correctly styled headings instead of body text.
  */
 function resolveStyle(template: DocumentTemplate, role: StyleRole, docType?: string): ParagraphStyle {
+  let byRole = STYLE_CACHE.get(template);
+  if (!byRole) {
+    byRole = new Map();
+    STYLE_CACHE.set(template, byRole);
+  }
+  const key = `${docType ?? 'thesis'}|${role}`;
+  const cached = byRole.get(key);
+  if (cached) return cached;
+  const resolved = resolveStyleUncached(template, role, docType);
+  byRole.set(key, resolved);
+  return resolved;
+}
+
+function resolveStyleUncached(template: DocumentTemplate, role: StyleRole, docType?: string): ParagraphStyle {
   const defaults = fallbackStyles(docType);
   const fallback = defaults[role] || defaults['paragraph'];
 
@@ -370,7 +406,12 @@ function renderCenteredText(
     children: styledRuns(block.text, style, actualBold, actualSize),
     // The cover's own styles decide the alignment: 校名行 is centred while the
     // 研究生/指导教师 rows are justified rows. Hardcoding centre ignored them.
-    alignment: mapAlignment(style.paragraph.alignment) ?? AlignmentType.CENTER,
+    //
+    // `mapAlignment` never returns undefined — it falls back to JUSTIFIED — so
+    // the `?? AlignmentType.CENTER` that used to sit here could not fire. The
+    // centred fallback the comment describes comes from `centered_text`'s own
+    // style, which declares `alignment: 'center'`.
+    alignment: mapAlignment(style.paragraph.alignment),
     spacing: { ...lineStyle(style) },
   });
 }
@@ -705,8 +746,13 @@ function styledRuns(
  * both sides are normalised and the two are joined once instead of blindly
  * prefixed.
  */
-function captionText(number: string | undefined, caption: string): string {
-  const title = caption.trim();
+function captionText(number: string | undefined, caption: string | undefined): string {
+  // A table written without a caption used to reach this function and throw
+  // `Cannot read properties of undefined (reading 'trim')` from inside the
+  // renderer — after `validateDocument` had already passed the document, since
+  // the validator only checked a table's headers and data. Both ends are fixed;
+  // this one keeps a malformed-but-loadable document from crashing the build.
+  const title = (caption ?? '').trim();
   const label = number?.trim();
   if (!label) return title;
   if (title.startsWith(label)) {
@@ -1032,7 +1078,7 @@ function renderFigure(
   })];
 }
 
-function renderSpacer(_template: DocumentTemplate, lines: number): Paragraph[] {
+function renderSpacer(lines: number): Paragraph[] {
   return Array.from({ length: lines }, () =>
     new Paragraph({
       spacing: { line: 312 },
@@ -1199,6 +1245,47 @@ const LIST_NUMBERING: INumberingOptions['config'] = [
   },
 ];
 
+/** The heading level a section at `depth` renders as. */
+const HEADING_TYPES = ['heading1', 'heading2', 'heading3', 'heading4'] as const;
+
+/**
+ * The shape `ThesisSection` and `JournalSection` both present to the flattener.
+ *
+ * The two differ only in their `type` vocabulary, which this helper never reads.
+ */
+interface NestableSection {
+  id: string;
+  title: string;
+  number?: string;
+  content: ContentBlock[];
+  subsections?: NestableSection[];
+}
+
+/**
+ * Flatten a section tree into a flat block list, one heading per section.
+ *
+ * Written once. It used to exist twice — `flattenSections` and
+ * `flattenJournalSections` — character for character identical apart from the
+ * section type and the name, each with its own copy of `HEADING_TYPES`.
+ */
+function flattenSections(sections: readonly NestableSection[], depth = 0): ContentBlock[] {
+  const result: ContentBlock[] = [];
+  const headingType = HEADING_TYPES[Math.min(depth, HEADING_TYPES.length - 1)];
+  for (const section of sections) {
+    result.push({
+      type: headingType,
+      text: section.title,
+      number: section.number,
+      id: section.id,
+    } as ContentBlock);
+    result.push(...section.content);
+    if (section.subsections && section.subsections.length > 0) {
+      result.push(...flattenSections(section.subsections, depth + 1));
+    }
+  }
+  return result;
+}
+
 /**
  * Tracks contiguous list runs so each one restarts its own numbering. Without
  * an instance, two separate ordered lists would continue 1,2,3 → 4,5,6.
@@ -1303,7 +1390,7 @@ function processBlock(
       return renderFigure(template, block, contentDir, docType);
 
     case 'spacer':
-      return renderSpacer(template, block.lines);
+      return renderSpacer(block.lines);
 
     case 'page_break':
       return [renderPageBreak()];
@@ -1388,26 +1475,7 @@ function renderThesisParts(
   state: RenderState = createRenderState(),
 ): RenderedPart[] {
   const parts: RenderedPart[] = [];
-  const HEADING_TYPES = ['heading1', 'heading2', 'heading3', 'heading4'] as const;
-
-  // Body Sections — recursively flatten to support arbitrary nesting depth
-  function flattenSections(sections: ThesisSection[], depth: number = 0): ContentBlock[] {
-    const result: ContentBlock[] = [];
-    const headingType = HEADING_TYPES[Math.min(depth, HEADING_TYPES.length - 1)];
-    for (const section of sections) {
-      result.push({
-        type: headingType,
-        text: section.title,
-        number: section.number,
-        id: section.id,
-      } as ContentBlock);
-      result.push(...section.content);
-      if (section.subsections && section.subsections.length > 0) {
-        result.push(...flattenSections(section.subsections, depth + 1));
-      }
-    }
-    return result;
-  }
+  // Body Sections — flattened by the shared `flattenSections` helper.
 
   const sections = doc.sections ?? [];
   const frontMatter = sections.filter(section => FRONT_MATTER_TYPES.has(section.type));
@@ -1613,28 +1681,14 @@ function renderJournalArticle(
   // Divider line or spacer before body
   children.push(new Paragraph({ children: [], spacing: { after: 120 } }));
 
-  const HEADING_TYPES = ['heading1', 'heading2', 'heading3', 'heading4'] as const;
-
-  // Sections — recursively flatten to support arbitrary nesting depth
-  function flattenJournalSections(sections: JournalSection[], depth: number = 0): ContentBlock[] {
-    const result: ContentBlock[] = [];
-    const headingType = HEADING_TYPES[Math.min(depth, HEADING_TYPES.length - 1)];
-    for (const section of sections) {
-      result.push({
-        type: headingType,
-        text: section.title,
-        number: section.number,
-        id: section.id,
-      } as ContentBlock);
-      result.push(...section.content);
-      if (section.subsections && section.subsections.length > 0) {
-        result.push(...flattenJournalSections(section.subsections, depth + 1));
-      }
-    }
-    return result;
-  }
-
-  children.push(...processBlocks(flattenJournalSections(doc.sections), template, contentDir, undefined, state));
+  // Sections — flattened by the shared `flattenSections` helper.
+  //
+  // `docType` is passed as 'journal' so the template's own styles reach the body.
+  // It used to be `undefined`, which made `resolveStyle` fall back to the thesis
+  // defaults and left a journal rendered from a journal template wearing the
+  // thesis typography. (Only 公文 opts out of the template, and it says so in
+  // `resolveStyle`: GB/T 9704-2012 fixes its typography.)
+  children.push(...processBlocks(flattenSections(doc.sections), template, contentDir, 'journal', state));
 
   // Back Matter
   if (doc.backMatter) {
@@ -2169,6 +2223,11 @@ function buildSingleSection(
 export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   const { template, document: doc, headerText, showPageNumbers = true, contentDir } = options;
 
+  // Start every render from a cold style cache: a caller that mutates the
+  // template between renders must see its own edit, and the cache is otherwise
+  // keyed only by the template's identity.
+  STYLE_CACHE.delete(template);
+
   // Shared across the whole document so list numbering instances stay unique.
   const state = createRenderState();
 
@@ -2243,21 +2302,11 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   // in Times New Roman. We fix this by post-processing the zip:
   // 1. Replace all *Theme attributes in styles.xml with explicit fonts
   // 2. Fix docDefaults eastAsia font
-  buffer = await fixChineseFonts(buffer);
-
-  // ── Post-process: document settings ─────────────────────────
-  // 对称页边距, 偶数页页眉 and "refresh fields on open" are all `w:settings`
-  // children, not section properties, so they are written into settings.xml
-  // after packing. `updateFields` matters because the 目录 is a TOC field whose
-  // page numbers only exist once Word evaluates it — and the source template
-  // does not set it, so a generated thesis would otherwise open with an empty
-  // table of contents.
-  //
   // 偶数页页眉 is written only when the output really asks for an even-page
   // head: the flag also demotes `w:type="default"` to odd pages, so setting it
   // while emitting no even reference would leave the even pages' head blank.
   const templateCarriesHeads = templateSections.some(section => section.headers || section.footers);
-  buffer = await patchSettings(buffer, {
+  buffer = await postProcess(buffer, {
     mirrorMargins: Boolean(template.page.mirrorMargins),
     evenAndOddHeaders: evenReference || (Boolean(template.evenAndOddHeaders) && templateCarriesHeads),
   });
@@ -2273,106 +2322,90 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
 }
 
 /**
- * Post-process the docx buffer to fix Chinese font rendering in WPS.
+ * The single post-process pass over the packed package.
  *
- * Root cause: The `docx` npm library (v9.x) writes `w:eastAsia="Times New Roman"`
- * in docDefaults when you set `font: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', eastAsia: '宋体', cs: 'Times New Roman' }`
- * in styles.default.document.run — it ignores eastAsia and uses `name` for all
- * four font slots. WPS honors the docDefaults eastAsia value, so all Chinese
- * text renders in Times New Roman (which falls back to a default CJK font that
- * looks wrong). Individual TextRun-level font.eastAsia DOES work, but only for
- * runs that explicitly set it — any run inheriting from defaults is broken.
+ * Two things have to happen after `Packer.toBuffer`, and they used to be two
+ * separate functions that each unzipped and re-zipped the whole document. The
+ * second pass generated without a `compression` option, so the package that
+ * reached disk was the stored one — 188.9 KB for 136.8 KB of content. Loading
+ * once, applying every patch, and generating once with DEFLATE removes the
+ * redundant pass and the size regression.
  *
- * Fix: After packing, unzip the buffer, strip all *Theme attributes from the
- * generated XML, and set docDefaults eastAsia to 仿宋 (the
- * standard Chinese official document body font). Individual run-level eastAsia
- * values (宋体/黑体/仿宋) are preserved and now take effect. The theme part is
- * retained so its package relationship remains valid.
+ * 1. Chinese fonts (WPS compatibility). The `docx` library writes
+ *    `w:eastAsia="Times New Roman"` into docDefaults when it was given
+ *    `font: { ascii: 'Times New Roman', eastAsia: '宋体' }` — it uses the ascii
+ *    name for all four slots. WPS honours docDefaults, so Chinese text
+ *    inheriting from it renders in Times New Roman. Stripping every `*Theme`
+ *    attribute and rewriting a Latin `w:eastAsia` to 仿宋 fixes the inherited
+ *    runs; run-level eastAsia values (宋体/黑体/仿宋) are left alone and now take
+ *    effect. The theme part itself stays, so its relationship remains valid.
+ *
+ * 2. Document settings the writer library cannot emit: `w:mirrorMargins`,
+ *    `w:evenAndOddHeaders` and `w:updateFields`. All three are children of
+ *    `w:settings` in `word/settings.xml` — none is a legal child of `w:sectPr`,
+ *    so writing them into document.xml produces a part Word ignores or repairs,
+ *    and a check that only greps for the string cannot tell the difference.
+ *    `updateFields` matters because the 目录 is a TOC field whose page numbers
+ *    only exist once Word evaluates it.
+ *
+ * Idempotent: a package that needs no patch is returned as the original buffer.
  */
-/**
- * 对称页边距 and 偶数页页眉 — document settings the writer library cannot emit.
- *
- * `ISectionPropertiesOptions` in the writer library has no mirror-margins
- * option, so the flag is written into the package after it is built. Idempotent:
- * a document that already declares it is returned untouched.
- */
-async function patchSettings(
+async function postProcess(
   buffer: Buffer,
   options: { mirrorMargins: boolean; evenAndOddHeaders: boolean },
 ): Promise<Buffer> {
-  // `w:mirrorMargins`, `w:evenAndOddHeaders` and `w:updateFields` are *document*
-  // settings — children of `w:settings` in `word/settings.xml`. None of them is a
-  // legal child of `w:sectPr`, so writing them into document.xml (as the first
-  // attempt did) produces a part Word ignores or repairs, and a verification that
-  // only greps for the string cannot tell the difference.
   const zip = await JSZip.loadAsync(buffer);
-  const entry = zip.file('word/settings.xml');
-  if (!entry) return buffer;
+  let changed = false;
 
-  let xml = await entry.async('string');
-
-  // Ask Word to refresh fields when the document opens, so the 目录 and its page
-  // numbers are right on the first look rather than after a manual F9.
-  if (!xml.includes('<w:updateFields')) {
-    xml = xml.replace(/(<w:settings[^>]*>)/, '$1<w:updateFields w:val="true"/>');
+  // 1. Chinese fonts, in both parts that carry run properties.
+  const THEME_ATTRS = /\s+w:(asciiTheme|hAnsiTheme|eastAsiaTheme|cstheme)="[^"]*"/g;
+  const LATIN_EAST_ASIA = /\sw:eastAsia="(Times New Roman|Arial|Calibri|Cambria)"/g;
+  for (const part of ['word/styles.xml', 'word/document.xml']) {
+    const entry = zip.file(part);
+    if (!entry) continue;
+    const original = await entry.async('string');
+    const patched = original
+      .replace(THEME_ATTRS, '')
+      .replace(LATIN_EAST_ASIA, ' w:eastAsia="仿宋"');
+    if (patched !== original) {
+      zip.file(part, patched);
+      changed = true;
+    }
   }
 
-  if (options.mirrorMargins && !xml.includes('<w:mirrorMargins')) {
-    xml = xml.replace(/(<w:settings[^>]*>)/, '$1<w:mirrorMargins/>');
+  // 2. Document settings.
+  const settings = zip.file('word/settings.xml');
+  if (settings) {
+    const original = await settings.async('string');
+    let xml = original;
+
+    // Ask Word to refresh fields when the document opens, so the 目录 and its
+    // page numbers are right on the first look rather than after a manual F9.
+    if (!xml.includes('<w:updateFields')) {
+      xml = xml.replace(/(<w:settings[^>]*>)/, '$1<w:updateFields w:val="true"/>');
+    }
+
+    if (options.mirrorMargins && !xml.includes('<w:mirrorMargins')) {
+      xml = xml.replace(/(<w:settings[^>]*>)/, '$1<w:mirrorMargins/>');
+    }
+
+    // 偶数页页眉. The writer library always emits this element — with
+    // `w:val="false"` when it was not asked for — so a document that wants it
+    // has to rewrite the value. Inserting a second element instead would leave
+    // Word reading the first one, which is `false`.
+    if (options.evenAndOddHeaders) {
+      xml = xml.includes('<w:evenAndOddHeaders')
+        ? xml.replace(/<w:evenAndOddHeaders[^>]*\/>/, '<w:evenAndOddHeaders/>')
+        : xml.replace(/(<w:settings[^>]*>)/, '$1<w:evenAndOddHeaders/>');
+    }
+
+    if (xml !== original) {
+      zip.file('word/settings.xml', xml);
+      changed = true;
+    }
   }
 
-  // 偶数页页眉. The writer library always emits this element — with
-  // `w:val="false"` when it was not asked for — so a document that wants it has
-  // to rewrite the value. Inserting a second element instead would leave Word
-  // reading the first one, which is `false`.
-  if (options.evenAndOddHeaders) {
-    xml = xml.includes('<w:evenAndOddHeaders')
-      ? xml.replace(/<w:evenAndOddHeaders[^>]*\/>/, '<w:evenAndOddHeaders/>')
-      : xml.replace(/(<w:settings[^>]*>)/, '$1<w:evenAndOddHeaders/>');
-  }
-
-  if (xml === await entry.async('string')) return buffer;
-  zip.file('word/settings.xml', xml);
-  return zip.generateAsync({ type: 'nodebuffer' });
-}
-
-async function fixChineseFonts(buffer: Buffer): Promise<Buffer> {
-  const zip = await JSZip.loadAsync(buffer);
-
-  // 1. Fix styles.xml
-  const stylesFile = zip.file('word/styles.xml');
-  if (stylesFile) {
-    let stylesXml = await stylesFile.async('string');
-    // Remove all *Theme attributes
-    stylesXml = stylesXml.replace(
-      /\s+w:(asciiTheme|hAnsiTheme|eastAsiaTheme|cstheme)="[^"]*"/g,
-      '',
-    );
-    // Fix any rFonts where eastAsia is a Latin font → 仿宋
-    stylesXml = stylesXml.replace(
-      /\sw:eastAsia="(Times New Roman|Arial|Calibri|Cambria)"/g,
-      ' w:eastAsia="仿宋"',
-    );
-    zip.file('word/styles.xml', stylesXml);
-  }
-
-  // 2. Fix document.xml
-  const docFile = zip.file('word/document.xml');
-  if (docFile) {
-    let docXml = await docFile.async('string');
-    // Remove all *Theme attributes
-    docXml = docXml.replace(
-      /\s+w:(asciiTheme|hAnsiTheme|eastAsiaTheme|cstheme)="[^"]*"/g,
-      '',
-    );
-    // Fix any rFonts where eastAsia is a Latin font → 仿宋
-    docXml = docXml.replace(
-      /\sw:eastAsia="(Times New Roman|Arial|Calibri|Cambria)"/g,
-      ' w:eastAsia="仿宋"',
-    );
-    zip.file('word/document.xml', docXml);
-  }
-
+  if (!changed) return buffer;
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
