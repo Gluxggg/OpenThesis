@@ -39,6 +39,62 @@ export interface TemplateNumbering {
   levels: TemplateNumberingLevel[];
 }
 
+export interface BorderSpec {
+  /** `w:val`: `single`, `double`, `dashed`, `none`, … */
+  style: string;
+  /** `w:sz`: eighths of a point. 12 = 1.5pt, 6 = 0.75pt, 4 = 0.5pt. */
+  size: number;
+  /** `w:color`, or `auto`. */
+  color: string;
+}
+
+/**
+ * How a template draws its tables.
+ *
+ * Templates disagree sharply here: a Chinese journal draws three rules (top,
+ * header bottom, bottom) with 0.5 pt strokes, a university thesis draws 1.5 pt
+ * top and bottom with a 0.75 pt header rule, an Elsevier template draws a full
+ * grid. The renderer used to hardcode one of those.
+ */
+export interface TableFormat {
+  borders?: {
+    top?: BorderSpec;
+    bottom?: BorderSpec;
+    left?: BorderSpec;
+    right?: BorderSpec;
+    insideH?: BorderSpec;
+    insideV?: BorderSpec;
+  };
+  /** `w:jc` on `w:tblPr`: how the table sits in the text column. */
+  alignment?: 'left' | 'center' | 'right';
+  /** `w:tblLayout/@w:type`. */
+  layout?: string;
+  /** `w:gridCol` widths, in twips, from the first table in the template. */
+  columnWidths?: number[];
+  /** `w:tcPr/w:shd/@w:fill` on a header cell, when the template shades one. */
+  headerFill?: string;
+  /** A header cell's `w:rPr/w:sz`, in half-points. */
+  headerSize?: number;
+  /** A header cell's `w:rPr/w:b` — bold. */
+  headerBold?: boolean;
+}
+
+/**
+ * How a template places its figures.
+ *
+ * Every template surveyed keeps figures inline and centred; the fields are
+ * recorded so a template that does something else can say so.
+ */
+export interface ImageFormat {
+  /** `w:jc` on the paragraph that holds the drawing. */
+  alignment?: 'left' | 'center' | 'right';
+  /** `wp:inline` vs `wp:anchor`. */
+  placement?: 'inline' | 'anchor';
+  /** The width of the first inline drawing, in EMU. 914400 EMU = 1 inch. */
+  widthEmu?: number;
+  heightEmu?: number;
+}
+
 export interface DocumentTemplate {
   meta: TemplateMeta;
   page: PageSettings;
@@ -87,6 +143,10 @@ export interface DocumentTemplate {
    * level inline keeps the abstract definition.
    */
   numbering?: TemplateNumbering[];
+  /** How the template draws its tables, when it draws any. */
+  tableFormat?: TableFormat;
+  /** How the template places its figures, when it has any. */
+  imageFormat?: ImageFormat;
 }
 
 export interface TemplateMeta {
