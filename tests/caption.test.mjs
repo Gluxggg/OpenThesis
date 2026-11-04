@@ -7,6 +7,16 @@ import { join } from 'node:path';
 import { createUSTBTemplate, renderDocument } from '../packages/docx-renderer/dist/index.js';
 import { parseMarkdownBlocks } from '../packages/markdown-parser/dist/index.js';
 
+/** Every `w:t` in a paragraph, joined — how a caption reads once fields are in it. */
+function paragraphText(xml, anchor) {
+  const at = xml.indexOf(anchor);
+  if (at < 0) return '';
+  const open = xml.lastIndexOf('<w:p>', at);
+  const close = xml.indexOf('</w:p>', at);
+  return [...xml.slice(open, close).matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map(m => m[1]).join('');
+}
+
+
 const template = createUSTBTemplate();
 
 // A 2x2 JPEG, the same bytes the other renderer tests embed.

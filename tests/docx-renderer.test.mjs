@@ -8,6 +8,27 @@ import { fileURLToPath } from 'node:url';
 import { createUSTBTemplate, renderDocument } from '../packages/docx-renderer/dist/index.js';
 import { parseTemplate } from '../packages/template-parser/dist/index.js';
 
+/** The instruction text of every complex field in the document. */
+function fieldInstrs(xml) {
+  return [...xml.matchAll(/<w:instrText[^>]*>([^<]*)<\/w:instrText>/g)].map(m => m[1].trim());
+}
+
+/** The bookmark a `REF` field points at, if there is one. */
+function refTarget(xml) {
+  return fieldInstrs(xml).map(i => /^REF\s+(\S+)/.exec(i)?.[1]).find(Boolean);
+}
+
+
+/** Every `w:t` in a paragraph, joined — how a caption reads once fields are in it. */
+function paragraphText(xml, anchor) {
+  const at = xml.indexOf(anchor);
+  if (at < 0) return '';
+  const open = xml.lastIndexOf('<w:p>', at);
+  const close = xml.indexOf('</w:p>', at);
+  return [...xml.slice(open, close).matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map(m => m[1]).join('');
+}
+
+
 const template = createUSTBTemplate();
 
 async function documentXml(buffer) {
@@ -1529,14 +1550,15 @@ test('a [[表3-1]] in the body becomes a REF field pointing at the caption bookm
   const { xml } = await documentXml(buffer);
 
   const bookmark = xml.match(/<w:bookmarkStart[^>]*w:name="([^"]+)"/)?.[1];
-  const target = xml.match(/<w:fldSimple w:instr=" REF ([^ \\"]+)/)?.[1];
+  const target = refTarget(xml);
   assert.ok(bookmark, 'expected a caption bookmark');
   assert.ok(target, 'expected a REF field');
   assert.equal(bookmark, target, 'the field must point at the bookmark the caption created');
 
-  // A viewer that does not evaluate fields still shows the number.
-  const fallback = xml.match(/<w:fldSimple[\s\S]*?<\/w:fldSimple>/)?.[0].replace(/<[^>]+>/g, '');
-  assert.equal(fallback, '表3-1');
+  // A viewer that does not evaluate fields still shows the number: the field
+  // carries its result between `separate` and `end`.
+  const result = /<w:fldChar w:fldCharType="separate"[\s\S]{0,24}?<w:t[^>]*>([^<]*)<\/w:t>/.exec(xml)?.[1];
+  assert.equal(result, '表3-1');
 });
 
 test('a longhand caption number is left as text, not converted to a field', async () => {
@@ -1551,7 +1573,7 @@ test('a longhand caption number is left as text, not converted to a field', asyn
     },
   });
   const { xml } = await documentXml(buffer);
-  assert.doesNotMatch(xml, /<w:fldSimple/);
+  assert.equal(refTarget(xml), undefined, 'no REF field should be emitted');
   assert.match(xml, /如表3-1所示。/);
 });
 
@@ -1641,19 +1663,15 @@ test('captions without a number are numbered per chapter', async () => {
   const { xml } = await documentXml(buffer);
 
   // Front matter is outside a chapter, so its caption is 表1; chapters restart.
-  // The number and the title are separate runs (the number carries the bookmark),
-  // so each is asserted on its own.
-  // The caption is one paragraph: the number run (inside the bookmark), then the
-  // title run. Parse the paragraph that contains the title rather than guessing
-  // from a character window.
+  // The number is not one run any more: it is the label run, a STYLEREF field and
+  // a SEQ field. Join everything the paragraph prints and drop the title.
   const captionText = (title) => {
     const at = xml.indexOf(title);
     assert.ok(at > 0, `expected the caption ${title}`);
     const open = xml.lastIndexOf('<w:p>', at);
     const close = xml.indexOf('</w:p>', at);
-    const paragraph = xml.slice(open, close);
-    const runs = [...paragraph.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map(m => m[1]);
-    return runs[0]?.trim() ?? '';
+    const printed = [...xml.slice(open, close).matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map(m => m[1]).join('');
+    return printed.slice(0, printed.indexOf(title)).trim();
   };
   assert.equal(captionText('前置表'), '表1');
   assert.equal(captionText('第一个表'), '表1-1');
@@ -1678,7 +1696,7 @@ test('a reference to a caption that does not exist warns instead of emitting a b
       },
     });
     const { xml } = await documentXml(buffer);
-    assert.doesNotMatch(xml, /<w:fldSimple/);
+    assert.equal(refTarget(xml), undefined, 'no REF field should be emitted');
     assert.match(xml, /\[\[表9-9\]\]/, 'the reference is left as text');
   } finally {
     console.warn = original;
@@ -1701,7 +1719,7 @@ test('a reference can name a block by id, which survives automatic numbering', a
   });
   const { xml } = await documentXml(buffer);
   const bookmark = xml.match(/<w:bookmarkStart[^>]*w:name="([^"]+)"/)?.[1];
-  const target = xml.match(/<w:fldSimple w:instr=" REF ([^ \\"]+)/)?.[1];
+  const target = refTarget(xml);
   assert.ok(bookmark, 'expected the caption bookmark');
   assert.equal(target, bookmark, 'the field must point at that caption');
 });
@@ -1776,4 +1794,81 @@ test('a group figure numbers once and can be referenced by that number', async (
   const numbers = [...xml.matchAll(/图1-1/g)].length;
   assert.ok(numbers >= 1);
   assert.equal((xml.match(/_Ref图11/g) ?? []).length >= 1, true, 'the group caption should be bookmarked');
+});
+
+// ── Captions as Word captions ──────────────────────────────
+
+test('a caption number is a SEQ field, which is what makes it a Word caption', async () => {
+  // Word's Cross-reference dialog lists captions by SEQ identifier. A number
+  // written as plain text looks identical and is invisible to it.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'SEQ', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: '第一章', content: [
+        { type: 'table', caption: '参数', headers: ['A'], data: [['1']] },
+        { type: 'figure', path: 'missing.png', caption: '示意' },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const instrs = fieldInstrs(xml);
+
+  assert.ok(
+    instrs.some(i => i.startsWith('SEQ Table') && i.includes('\\* ARABIC') && i.includes('\\s 1')),
+    `a table caption must carry SEQ Table with \\s 1, got ${JSON.stringify(instrs)}`,
+  );
+  assert.ok(
+    instrs.some(i => i.startsWith('SEQ Figure') && i.includes('\\s 1')),
+    `a figure caption must carry SEQ Figure with \\s 1, got ${JSON.stringify(instrs)}`,
+  );
+  // No STYLEREF: the chapter titles carry their number in their text, so a
+  // STYLEREF there renders as "Error: Reference source not found".
+  assert.ok(!instrs.some(i => i.startsWith('STYLEREF')), 'no STYLEREF should be emitted');
+});
+
+test('a caption\'s SEQ field sits inside its bookmark, so a REF returns the number', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Bounds', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'table', caption: '参数', headers: ['A'], data: [['1']] },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const start = xml.indexOf('<w:bookmarkStart');
+  const end = xml.indexOf('<w:bookmarkEnd');
+  const between = xml.slice(start, end);
+  assert.match(between, /SEQ Table/, 'the SEQ field must be inside the bookmark');
+});
+
+test('chapter headings carry an outline level, without which \\s 1 cannot restart', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Outline', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: '第一章', content: [{ type: 'paragraph', text: 'x' }] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /<w:outlineLvl w:val="0"\/>/, 'a chapter is outline level 1, which is w:val="0"');
+});
+
+test('a hand-written caption number stays literal text and is not renumbered', async () => {
+  // The author asked for that exact label; a SEQ field would renumber it out
+  // from under them.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Manual', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'table', caption: '参数', number: '表3-1', headers: ['A'], data: [['1']] },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.ok(!fieldInstrs(xml).some(i => i.startsWith('SEQ')), 'no SEQ field for a manual number');
+  assert.match(xml, /<w:t[^>]*>表3-1<\/w:t>/, 'the manual label is written as text');
 });
