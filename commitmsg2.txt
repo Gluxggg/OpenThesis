@@ -1,0 +1,21 @@
+docs: the journal submission flow, end to end
+
+A publisher's template is the specification. Two kinds are common and they are read
+differently: a styled template by its style names (Elsevier's Els family, ACM's
+Title/Authors/Abstract, Pandoc's reference.docx names), and a fill-in instruction
+sheet by its text (word limits, keyword minimums, expected sections).
+
+- references/journal-submission.md documents the flow: parse the template, write the
+  content, build, then render and look at it. It lists what the generator does on its
+  own and what still needs a person (a table spanning both columns, journal-specific
+  blocks such as ElsArticlehistory, per-journal flourishes).
+- SKILL.md points at it when the task is a journal submission.
+- tests/cli-journal-flow.test.mjs runs the whole chain through the CLI — parse an ACM
+  template, write content, build — and checks the document comes out. The library
+  tests check pieces; this checks the thing a person actually does.
+
+Verified by hand against a real Elsevier template as well: parse produced a
+.template.json with 17 bound roles, and build produced a document whose title, authors,
+affiliation, abstract and keywords all take the publisher's own styles.
+
+pnpm check: 225 tests, all passing (223 before).

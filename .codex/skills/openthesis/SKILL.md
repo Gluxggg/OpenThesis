@@ -14,6 +14,7 @@ Use the repository's typed pipeline instead of constructing Word files ad hoc:
 - For Markdown input, read [references/markdown.md](references/markdown.md), then use direct build unless the user also needs editable JSON.
 - For structured JSON, read [references/schema.md](references/schema.md) only when creating or repairing content blocks.
 - For a custom `.docx` or text-based `.pdf` template reference, parse it first and then render with the resulting `.template.json`.
+- **For a journal submission — a publisher's Word template, an author guide, or "format my paper for journal X" — read [references/journal-submission.md](references/journal-submission.md) first.** It explains the two kinds of journal template, what the generator does on its own, and what still needs a person.
 - For setup, exact commands, validation, and failure recovery, read [references/workflows.md](references/workflows.md).
 
 ## Execute
