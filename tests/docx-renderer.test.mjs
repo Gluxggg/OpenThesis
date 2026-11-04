@@ -936,3 +936,143 @@ test('renders inline LaTeX math as native Office Math (OMML) within paragraphs',
   assert.doesNotMatch(xml, /\\mathbf/);
   assert.doesNotMatch(xml, /\$K_\{ij\}\$/);
 });
+
+// ── Regression: the fixes from the follow-up audit ───────────
+
+test('a table with no caption renders instead of throwing', async () => {
+  // `captionText` used `.trim()` on an undefined caption, so a document that
+  // skipped `validateDocument` killed the build with
+  // `Cannot read properties of undefined (reading 'trim')`.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'No caption' }, cover: [],
+      sections: [{
+        id: 'c1', type: 'chapter', title: 'Chapter',
+        content: [{ type: 'table', headers: ['A', 'B'], data: [['1', '2']] }],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /<w:t[^>]*>1<\/w:t>/);
+});
+
+test('the emitted package is deflate-compressed, not stored', async () => {
+  // The renderer used to finish with a second `generateAsync` that passed no
+  // `compression` option, i.e. STORE. Every output was the uncompressed sum of
+  // its parts — 188.9 KB where 136.8 KB was achievable.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Compression' }, cover: [],
+      sections: [{
+        id: 'c1', type: 'chapter', title: 'Chapter',
+        content: [{ type: 'paragraph', text: '正文段落 '.repeat(200) }],
+      }],
+    },
+  });
+  const zip = await JSZip.loadAsync(buffer);
+  const stored = await zip.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
+  assert.ok(
+    buffer.length < stored.length * 0.9,
+    `expected a compressed package, got ${buffer.length} bytes against ${stored.length} stored`,
+  );
+});
+
+test('a template mutated between renders is read fresh', async () => {
+  // `resolveStyle` is cached per template object. The cache is dropped at the
+  // start of every render, so a caller that edits its template in place — as
+  // the template-authoring flow does — still sees the edit.
+  const doc = {
+    type: 'thesis', meta: { title: 'Cache' }, cover: [],
+    sections: [{
+      id: 'c1', type: 'chapter', title: 'Chapter',
+      content: [{ type: 'paragraph', text: 'Body' }],
+    }],
+  };
+  const mutable = structuredClone(template);
+  const before = await documentXml(await renderDocument({ template: mutable, document: doc }));
+  mutable.styles[mutable.roleWinners.paragraph].font.size = 44;
+  const after = await documentXml(await renderDocument({ template: mutable, document: doc }));
+
+  assert.match(before.xml, /<w:sz w:val="24"\/>/);
+  assert.match(after.xml, /<w:sz w:val="44"\/>/);
+});
+
+test('nested subsections keep their heading level', async () => {
+  // `flattenSections` was written twice — once for theses, once for journals —
+  // character for character identical. Both now go through one helper, and this
+  // pins the depth-to-heading mapping it must preserve.
+  //
+  // The renderer bakes each role's formatting into the paragraph instead of
+  // emitting a `w:pStyle` reference, so the level is observed through the font
+  // size the role resolves to. The shipped template sizes heading2 and heading3
+  // identically, so this clone gives every level its own size.
+  const tpl = structuredClone(template);
+  const sizes = { heading1: 30, heading2: 26, heading3: 22 };
+  for (const [role, size] of Object.entries(sizes)) {
+    tpl.styles[tpl.roleWinners[role]].font.size = size;
+  }
+
+  const buffer = await renderDocument({
+    template: tpl,
+    document: {
+      type: 'thesis', meta: { title: 'Nesting' }, cover: [],
+      sections: [{
+        id: 'c1', type: 'chapter', title: 'Level one',
+        content: [],
+        subsections: [{
+          id: 'c2', type: 'chapter', title: 'Level two',
+          content: [],
+          subsections: [{
+            id: 'c3', type: 'chapter', title: 'Level three',
+            content: [{ type: 'paragraph', text: 'Leaf' }],
+          }],
+        }],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+
+  const sizeOfHeading = (title) => {
+    const at = xml.indexOf(title);
+    assert.ok(at >= 0, `expected "${title}" in the output`);
+    const lastSize = [...xml.slice(0, at).matchAll(/<w:sz w:val="(\d+)"\/>/g)].pop();
+    return Number(lastSize?.[1]);
+  };
+
+  assert.equal(sizeOfHeading('Level one'), 30);
+  assert.equal(sizeOfHeading('Level two'), 26);
+  assert.equal(sizeOfHeading('Level three'), 22);
+});
+
+test('a journal body takes its typography from the template, not from the thesis defaults', async () => {
+  // The journal path called `processBlocks` with `docType: undefined`, so
+  // `resolveStyle` never consulted the template and a journal rendered from a
+  // journal template came out in the thesis fallback styles.
+  const tpl = structuredClone(template);
+  const headingId = tpl.roleWinners.heading1;
+  tpl.styles[headingId].font.size = 37;
+
+  const buffer = await renderDocument({
+    template: tpl,
+    document: {
+      type: 'journal',
+      meta: {
+        title: 'A paper',
+        authors: [{ name: 'A', affiliations: [{ institution: 'Somewhere' }] }],
+        keywords: ['one'],
+      },
+      sections: [{
+        id: 'intro', type: 'introduction', title: 'Introduction',
+        content: [{ type: 'paragraph', text: 'Body.' }],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+
+  const at = xml.indexOf('Introduction');
+  assert.ok(at >= 0, 'expected the section heading in the output');
+  const lastSize = [...xml.slice(0, at).matchAll(/<w:sz w:val="(\d+)"\/>/g)].pop();
+  assert.equal(Number(lastSize?.[1]), 37);
+});

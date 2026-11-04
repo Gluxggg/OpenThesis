@@ -314,3 +314,26 @@ What reading them turned up, and what is still open:
 4. **`fixChineseFonts` is over-broad.** It strips every `w:*Theme` attribute and
    rewrites Latin `w:eastAsia` values to 仿宋. Harmless for this template,
    hostile to one that says what it means.
+
+---
+
+## 6. Follow-up round — defects this audit missed
+
+A second review of the code after §1–§5 landed turned up ten more defects. Each
+one below was reproduced against the built packages before it was changed, and
+each has a named regression test.
+
+| # | Finding | Evidence | Status |
+|---|---|---|---|
+| F-1 | A table without `caption` passed validation and then threw inside the renderer: `captionText` called `.trim()` on `undefined`. `TableBlock.caption` was declared required but `validateTable` only checked headers and data. | `thesis build` on a table block with no `caption` exited 1 with `Cannot read properties of undefined (reading 'trim')` | Fixed — the validator reports `…\.caption: must be a string`, and `captionText` accepts an absent caption. An **empty** caption stays valid: it means "no caption" and the renderer emits no caption paragraph, which `examples/sample-thesis.md` relies on |
+| F-2 | `countStyleUsage` regex-scanned the **raw** `document.xml` for `<w:pStyle`, while the same part was parsed after `normalizeWordPrefix`. A template bound to another prefix counted zero uses for every style, so `pickRoleWinners` fell back to declaration order. | Two styles with `outlineLvl=0`, document applying `a2`: `w:` prefix → `a2` (right), `wp:` prefix → `a1` (an unused style) | Fixed — the part is normalised once and the count read from the parsed tree. The exported `countStyleUsage(string)` keeps its signature and now normalises internally |
+| F-3 | `w:beforeLines` / `w:afterLines` were ignored: spacing read only the twips `w:before` / `w:after`, so a style declaring 段前/段后 in lines parsed to nothing. | `<w:spacing w:beforeLines="50" w:afterLines="30"/>` → `paragraph: {}` | Fixed — converted with the effective run size and preferred over the twips beside them, the same precedence `w:firstLineChars` already had |
+| F-4 | `mergeStyles` built `rPr: { ...base.rPr, ...override.rPr }` unconditionally, so every inherited style ended with `rPr === {}`. Word writes `w:docDefaults` into every file, so the "no style declares any formatting" diagnostic could never fire. | A template with an empty `w:docDefaults` parsed to `font: {}` and `warnings: undefined`; deleting the element made the warning appear | Fixed — `mergeStyles` reuses `mergeRunProps`, which keeps `undefined` when both sides are absent |
+| F-5 | Every render loaded and regenerated the whole package **twice**, and the second pass passed no `compression` option — so the file that reached disk was stored, not deflated. | `renderDocument` 19.5 ms, of which one load+DEFLATE repack is 6.7 ms; output 188.9 KB for 136.8 KB of content | Fixed — one `postProcess`: load once, patch every part, generate once with DEFLATE, and return the original buffer when nothing changed. Now 13.7 ms and 136.8 KB |
+| F-6 | The journal renderer passed `docType: undefined` to `processBlocks`, so `resolveStyle` never consulted the template; a journal rendered from a journal template came out in the thesis fallback styles. 公文 is different — `resolveStyle` opts it out of the template on purpose, because GB/T 9704-2012 fixes its typography. | Journal heading rendered `黑体 30 half-points` only after the fix; before it followed `THESIS_STYLES` | Fixed for journal. 公文's hardcoded typography is intentional and documented at the call sites |
+| F-7 | `flattenSections` and `flattenJournalSections` were character-for-character identical, and `HEADING_TYPES` was declared twice. | — | Fixed — one generic `flattenSections` |
+| F-8 | `KNOWN_FLAGS` was one global set: every command accepted every flag, and a flag was honoured only if that command happened to call `readOption` for it. Same silent-no-op class the audit claimed to have closed for `--type=`. | `thesis init --org "Acme" -t missing.json` exited 0, wrote `thesis-content.json`, and used neither flag | Fixed — per-command flag tables, with `--force`/`-y` shared because all four commands enforce overwrite protection. `--help`/`--version` moved ahead of dispatch so `build --help` is no longer read as a content path |
+| F-9 | `resolveStyle` ran at least once per block and three times per table, re-deriving an identical style: a `for…in` over 48 role entries for every role without a recorded winner (the shipped template records 12), then two `Object.entries`/`fromEntries` merges. | — | Fixed — cached in a `WeakMap` keyed by template identity, dropped at the start of every render so an in-place template edit is still read |
+| F-10 | Dead plumbing: `mapAlignment(...) ?? AlignmentType.CENTER` could never fire (`mapAlignment` always returns a value); `renderSpacer` took a template it never used; `RenderOptions.outputPath` was declared required while every caller treated it as optional and the implementation guarded it. | — | Fixed — the unreachable fallback removed, the unused parameter dropped, `outputPath` declared optional to match how it is actually used |
+
+`pnpm check`: 137 tests, all passing (120 before this round, 17 added).

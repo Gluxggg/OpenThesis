@@ -375,3 +375,114 @@ test('leaves evenAndOddHeaders unset when settings.xml does not ask for it', asy
   const parsedOff = await parseTemplate(await off.generateAsync({ type: 'nodebuffer' }), { documentType: 'thesis' });
   assert.equal(parsedOff.evenAndOddHeaders, undefined);
 });
+
+test('counts style usage from the parsed document when it binds another prefix', async () => {
+  // Two neutral-named styles, both outline level 0: neither a name pattern nor
+  // the outline level decides between them, only how often the document applies
+  // them. The document binds WordprocessingML to `wp`, and the usage counter used
+  // to scan the raw XML for the literal `<w:pStyle`, find nothing, count zero for
+  // every style, and let declaration order hand heading1 to the unused `a1`.
+  const styles = '<wp:style wp:type="paragraph" wp:styleId="a1"><wp:name wp:val="N1"/>'
+    + '<wp:pPr><wp:outlineLvl wp:val="0"/></wp:pPr><wp:rPr><wp:sz wp:val="32"/></wp:rPr></wp:style>'
+    + '<wp:style wp:type="paragraph" wp:styleId="a2"><wp:name wp:val="N2"/>'
+    + '<wp:pPr><wp:outlineLvl wp:val="0"/></wp:pPr><wp:rPr><wp:sz wp:val="28"/></wp:rPr></wp:style>';
+  const zip = new JSZip();
+  zip.file('word/styles.xml', `<?xml version="1.0"?>
+    <wp:styles xmlns:wp="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${styles}</wp:styles>`);
+  zip.file('word/document.xml', `<?xml version="1.0"?>
+    <wp:document xmlns:wp="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><wp:body>
+      <wp:p><wp:pPr><wp:pStyle wp:val="a2"/></wp:pPr><wp:r><wp:t>标题</wp:t></wp:r></wp:p>
+      <wp:sectPr><wp:pgSz wp:w="11906" wp:h="16838"/><wp:pgMar wp:top="1440" wp:bottom="1440" wp:left="1797" wp:right="1797"/></wp:sectPr>
+    </wp:body></wp:document>`);
+
+  const template = await parseTemplate(
+    await zip.generateAsync({ type: 'nodebuffer' }),
+    { documentType: 'thesis' },
+  );
+
+  // a2 is the style the document actually applies; a1 is declared but unused.
+  assert.equal(template.roleWinners.heading1, 'a2');
+  assert.equal(template.styles[template.roleWinners.heading1].font.size, 28);
+});
+
+test('converts w:beforeLines / w:afterLines into twips', async () => {
+  // Chinese Word/WPS templates write 段前0.5行 as `w:beforeLines="50"`, and reading
+  // only `w:before` / `w:after` parsed such a style as declaring no spacing at
+  // all. One line is one font size: 50 hundredths at 12 pt is 120 twips.
+  const lines = await parseTemplate(await createTemplateWith({
+    styles: '<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/>'
+      + '<w:pPr><w:spacing w:beforeLines="50" w:afterLines="30"/></w:pPr>'
+      + '<w:rPr><w:sz w:val="24"/></w:rPr></w:style>',
+    body: BODY_SECTION,
+  }), { documentType: 'thesis' });
+  assert.equal(lines.styles.a.paragraph.spaceBefore, 120);
+  assert.equal(lines.styles.a.paragraph.spaceAfter, 72);
+
+  // A template that writes plain twips keeps working the way it always did.
+  const twips = await parseTemplate(await createTemplateWith({
+    styles: '<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/>'
+      + '<w:pPr><w:spacing w:before="300" w:after="150"/></w:pPr></w:style>',
+    body: BODY_SECTION,
+  }), { documentType: 'thesis' });
+  assert.equal(twips.styles.a.paragraph.spaceBefore, 300);
+  assert.equal(twips.styles.a.paragraph.spaceAfter, 150);
+});
+
+test('a line-based spacing value wins over the twips beside it and follows the font size', async () => {
+  // Word writes both, and the twips copy is stale in the same way as
+  // `w:firstLine`: the line-based value is the one that holds. A 16 pt style's
+  // 0.5 line is 160 twips, not the 300 left behind at 10 pt.
+  const template = await parseTemplate(await createTemplateWith({
+    styles: '<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/>'
+      + '<w:pPr><w:spacing w:beforeLines="50" w:before="300" w:afterLines="100" w:after="999"/></w:pPr>'
+      + '<w:rPr><w:sz w:val="32"/></w:rPr></w:style>',
+    body: BODY_SECTION,
+  }), { documentType: 'thesis' });
+  assert.equal(template.styles.a.paragraph.spaceBefore, 160);
+  assert.equal(template.styles.a.paragraph.spaceAfter, 320);
+});
+
+test('warns about a template whose only formatting declaration is an empty w:docDefaults', async () => {
+  // Word writes `<w:docDefaults><w:rPrDefault><w:rPr/></w:rPrDefault></w:docDefaults>`
+  // into every file it saves. The inheritance merge spread two absent
+  // run-property bags into `rPr: {}`, so a template that declares nothing counted
+  // as declaring typography and this warning could never fire.
+  const buffer = await createTemplateWith({
+    styles: '<w:docDefaults><w:rPrDefault><w:rPr/></w:rPrDefault></w:docDefaults>'
+      + '<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/></w:style>',
+    body: BODY_SECTION,
+  });
+  const template = await parseTemplate(buffer, { documentType: 'thesis' });
+  assert.ok(template.warnings.some(w => /carries no typography/.test(w)), JSON.stringify(template.warnings));
+
+  // The same empty defaults must not mask a style that does declare formatting.
+  const formatted = await parseTemplate(await createTemplateWith({
+    styles: '<w:docDefaults><w:rPrDefault><w:rPr/></w:rPrDefault></w:docDefaults>'
+      + '<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/>'
+      + '<w:rPr><w:sz w:val="24"/></w:rPr></w:style>',
+    body: BODY_SECTION,
+  }), { documentType: 'thesis' });
+  assert.equal(formatted.warnings, undefined);
+});
+
+test('the shipped USTB template declares formatting and carries no typography warning', async () => {
+  // Acceptance for the empty-rPr fix has two halves: a silent template must warn,
+  // and a real one must stay quiet. Stating the second half against the shipped
+  // asset is what used to require regenerating it to notice.
+  const { readFile } = await import('node:fs/promises');
+  const asset = JSON.parse(await readFile(new URL('../assets/ustb-thesis-template.json', import.meta.url), 'utf8'));
+
+  assert.ok(
+    !(asset.warnings ?? []).some(w => /carries no typography/.test(w)),
+    JSON.stringify(asset.warnings),
+  );
+  // The premise the warning checks, stated against the asset itself: every style
+  // declares something.
+  const silent = Object.entries(asset.styles).filter(([, style]) => (
+    Object.keys(style.font ?? {}).length === 0
+    && Object.keys(style.paragraph ?? {}).length === 0
+    && style.lineSpacing === undefined
+    && style.lineSpacingRule === undefined
+  ));
+  assert.deepEqual(silent, []);
+});

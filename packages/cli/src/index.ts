@@ -3,10 +3,11 @@
 // @openthesis/cli — OpenThesis Command Line Interface
 // ============================================================
 // Usage:
-//   thesis parse <template.docx> [--type thesis|journal|official]
-//   thesis import <content.md> [--type thesis|journal|official] [-o <content.json>]
-//   thesis build <content.json|content.md> [-t <template.json>] [-o <output.docx>]
-//   thesis init [--type thesis|journal|official]
+//   thesis parse <template.docx> [--type thesis|journal|official] [--org <name>] [--force]
+//   thesis import <content.md> [--type thesis|journal|official] [-o <content.json>] [--force]
+//   thesis build <content.json|content.md> [-t <template.json>] [-o <output.docx>] [--force]
+//   thesis init [--type thesis|journal|official] [--force]
+//   `--force`/`-y` are accepted by every command that writes a file.
 // ============================================================
 
 import { readFileSync, writeFileSync, realpathSync, mkdirSync, existsSync } from 'fs';
@@ -28,15 +29,18 @@ const args = rawArgs[0] === 'thesis' ? rawArgs.slice(1) : rawArgs;
 const command = args[0];
 
 async function main() {
+  // Help and version are global options, so they are honoured wherever they
+  // appear: `thesis build --help` used to treat `--help` as a file name.
+  // Every other flag belongs to a command and is checked against that
+  // command's table in rejectUnknownFlags.
+  if (args.includes('--help') || args.includes('-h')) { printHelp(); return; }
+  if (args.includes('--version') || args.includes('-v')) { console.log(VERSION); return; }
+
   switch (command) {
     case 'parse':   await cmdParse(args.slice(1)); break;
     case 'import':  cmdImport(args.slice(1)); break;
     case 'build':   await cmdBuild(args.slice(1)); break;
     case 'init':    cmdInit(args.slice(1)); break;
-    case '--version':
-    case '-v':      console.log(VERSION); break;
-    case '--help':
-    case '-h':
     case undefined: printHelp(); break;
     default:
       console.error(`Unknown command: ${command}`);
@@ -48,7 +52,7 @@ async function main() {
 // ── thesis import <content.md> ────────────────────────────
 
 function cmdImport(args: string[]) {
-  rejectUnknownFlags(args);
+  rejectUnknownFlags(command, args);
   if (args.length < 1) {
     console.error('Usage: thesis import <content.md> [--type thesis|journal|official] [-o <content.json>]');
     process.exit(1);
@@ -95,7 +99,7 @@ function cmdImport(args: string[]) {
 // ── thesis parse <template.docx> ──────────────────────────
 
 async function cmdParse(args: string[]) {
-  rejectUnknownFlags(args);
+  rejectUnknownFlags(command, args);
   if (args.length < 1) {
     console.error('Usage: thesis parse <template.docx> [--type thesis|journal|official] [--org <name>]');
     process.exit(1);
@@ -160,7 +164,7 @@ async function cmdParse(args: string[]) {
   }
 }
 async function cmdBuild(args: string[]) {
-  rejectUnknownFlags(args);
+  rejectUnknownFlags(command, args);
   if (args.length < 1) {
     console.error('Usage: thesis build <content.json|content.md> [-t <template.json>] [-o <output.docx>] [--type thesis|journal|official]');
     process.exit(1);
@@ -232,7 +236,6 @@ async function cmdBuild(args: string[]) {
       template = createUSTBTemplate();
     }
 
-    let docType = 'document';
     if (isMarkdown) console.log(`  Markdown imported as: ${contentJson.type}`);
     if (contentJson && typeof contentJson === 'object' && 'type' in contentJson) {
       console.log(`  Structured document detected: ${contentJson.type}`);
@@ -246,10 +249,6 @@ async function cmdBuild(args: string[]) {
         process.exit(1);
       }
 
-      docType = contentJson.type === 'thesis' ? 'thesis'
-        : contentJson.type === 'journal' ? 'journal article'
-        : 'official document';
-        
       const buffer = await renderDocument({
         outputPath: toStdout ? '' : outputPath,
         template,
@@ -267,15 +266,14 @@ async function cmdBuild(args: string[]) {
         process.exit(1);
       }
 
-      docType = contentJson.title?.includes('期刊') ? 'journal article'
-        : contentJson.title?.includes('公文') || contentJson.title?.includes('通知') ? 'official document'
-        : 'document';
-        
       const buffer = await renderLegacy(contentJson as LegacyDocumentJSON, template, toStdout ? '' : outputPath, contentDir);
       if (toStdout) process.stdout.write(buffer);
     }
 
-    console.log(`\n✅ ${docType} built successfully!`);
+    // The type is the one the content declares. Legacy JSON has no `type`
+    // field, so it reports itself as a plain document rather than keeping the
+    // old guess that read the title for 期刊/公文/通知.
+    console.log(`\n✅ ${contentJson.type ?? 'document'} built successfully!`);
     console.log(`   Output: ${outputPath}`);
   } catch (err: unknown) {
     console.error(`\n❌ Failed to build: ${errorMessage(err)}`);
@@ -286,7 +284,7 @@ async function cmdBuild(args: string[]) {
 // ── thesis init [--type thesis|journal|official] ───────────
 
 function cmdInit(args: string[]) {
-  rejectUnknownFlags(args);
+  rejectUnknownFlags(command, args);
   // Shared with every other command so `init --type=journal` works too; the
   // old `args.indexOf('--type')` lookup silently produced a thesis sample.
   const docType = validateDocType(readOption(args, '--type') ?? 'thesis');
@@ -473,10 +471,28 @@ function printInitNext(type: DocumentType) {
 
 const VALID_DOC_TYPES: DocumentType[] = ['thesis', 'journal', 'official'];
 
-/** Options the CLI understands; anything else on the command line is a typo. */
-const VALUE_FLAGS = ['--type', '-t', '-o', '--org'];
-const SET_FLAGS = ['--force', '-y'];
-const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...SET_FLAGS, '--help', '-h', '--version', '-v']);
+/**
+ * The options each command actually reads.
+ *
+ * This used to be one flat set shared by every command, so a flag belonging to
+ * a different command was accepted and then ignored: `init --org Acme -t
+ * missing.json` exited 0 and wrote a sample, and `build x.json --org Acme`
+ * built the document as if `--org` had never been there. A flag outside the
+ * running command's row is now an error.
+ */
+const COMMAND_FLAGS: Record<string, readonly string[]> = {
+  parse:  ['--type', '--org'],
+  import: ['--type', '-o'],
+  build:  ['--type', '-t', '-o'],
+  init:   ['--type'],
+};
+
+/**
+ * Every command that writes a file runs the same overwrite guard, so these are
+ * the only flags that are not command-specific. `--help`/`--version` are
+ * global too, but main() answers them before dispatch.
+ */
+const OVERWRITE_FLAGS = ['--force', '-y'];
 
 /**
  * Read an option written either as `--flag value` or `--flag=value`.
@@ -507,14 +523,21 @@ function readOption(args: string[], flag: string): string | undefined {
   return value;
 }
 
-/** Fail loudly on unknown `-`/`--` tokens instead of quietly ignoring them. */
-function rejectUnknownFlags(args: string[]): void {
+/**
+ * Fail loudly on a flag the current command does not read.
+ *
+ * The table is per command: `-t` on `init` or `--org` on `build` used to be
+ * accepted and silently dropped, so the command exited 0 having done something
+ * other than what was asked.
+ */
+function rejectUnknownFlags(command: string, args: string[]): void {
+  const known = [...COMMAND_FLAGS[command], ...OVERWRITE_FLAGS];
   for (const arg of args) {
     if (!arg.startsWith('-') || arg === '-') continue;
     const name = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
-    if (!KNOWN_FLAGS.has(name)) {
+    if (!known.includes(name)) {
       console.error(`Unknown option: ${name}`);
-      console.error(`Known options: ${[...KNOWN_FLAGS].join(', ')}`);
+      console.error(`   \`thesis ${command}\` accepts: ${known.join(', ')}`);
       process.exit(1);
     }
   }
@@ -619,15 +642,21 @@ function printHelp() {
     thesis build manuscript.md -t template.json -o output.docx
     thesis build thesis-content.json -t template.json -o output.docx
 
-  Options (build):
-    -t <template.json>    Template file (default: built-in USTB)
-    -o <output.docx>      Output path (default: input + .docx, "-" for stdout)
-    --type <t>            Markdown document type (overrides front matter)
+  Global options (accepted by every command):
     --force, -y           Overwrite an existing output file
-
-  Other:
+    --help, -h            Show this help
     --version, -v         Print the version
     -                     Read the input from stdin (build, import)
+
+  Options by command — a flag outside its row is an error:
+    parse <template.docx>    --type <t>  --org <name>
+    import <content.md>      --type <t>  -o <content.json>    (stdin input requires -o)
+    build <content.json|md>  --type <t>  -t <template.json>   (default: built-in USTB)
+                             -o <output.docx>                 (default: input + .docx, "-" for stdout)
+    init                     --type <t>
+
+  parse, import, build and init all refuse to replace an existing output
+  unless --force/-y is given, so none of them can destroy work in silence.
 
   Examples:
     thesis import - --type journal -o paper.json < manuscript.md

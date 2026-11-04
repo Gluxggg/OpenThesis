@@ -253,3 +253,103 @@ test('writes the document to stdout without corrupting it', () => {
   assert.ok(result.stdout.length > 5000, `expected a document, received ${result.stdout.length} bytes`);
   assert.match(result.stderr.toString(), /Output:/, 'progress must move to stderr');
 });
+
+test('init rejects the flags it does not read instead of writing a sample anyway', () => {
+  // This is the audit's repro: the flag table was global, so `init` accepted
+  // `--org` and `-t`, ignored both, exited 0 and wrote thesis-content.json.
+  const dir = mkdtempSync(join(tmpdir(), 'openthesis-cli-'));
+  const result = run(['init', '--org', 'Acme', '-t', 'missing.json'], dir);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Unknown option: --org/);
+  // The error names the command and what it does take, so the fix is obvious.
+  assert.match(result.stderr, /`thesis init` accepts: --type, --force, -y/);
+  assert.equal(existsSync(join(dir, 'thesis-content.json')), false);
+});
+
+test('each command rejects a flag that belongs to another command', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'openthesis-cli-'));
+  writeFileSync(join(dir, 'paper.md'), '# Title\n\nBody.');
+  writeFileSync(join(dir, 'content.json'), thesisContent('Cross'));
+  const cases = [
+    { args: ['build', 'content.json', '--org', 'Acme'], flag: '--org', writes: 'content.docx' },
+    { args: ['import', 'paper.md', '-t', 'template.json'], flag: '-t', writes: 'paper.json' },
+    { args: ['parse', 'template.docx', '-o', 'out.json'], flag: '-o', writes: 'template.template.json' },
+  ];
+  for (const { args, flag, writes } of cases) {
+    const result = run(args, dir);
+    assert.equal(result.status, 1, `${args[0]} must reject ${flag}: ${result.stderr}`);
+    assert.match(result.stderr, new RegExp(`Unknown option: ${flag}`));
+    assert.match(result.stderr, new RegExp(`\`thesis ${args[0]}\` accepts:`));
+    assert.equal(existsSync(join(dir, writes)), false, `${args[0]} wrote ${writes} despite the rejection`);
+  }
+});
+
+test('the global options work for commands other than build', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'openthesis-cli-'));
+
+  // `--force`/`-y` used to be documented under "Options (build)", but every
+  // command runs the same overwrite guard.
+  assert.equal(run(['init'], dir).status, 0);
+  const refused = run(['init'], dir);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /Output already exists/);
+  assert.equal(run(['init', '--force'], dir).status, 0);
+  assert.equal(run(['init', '-y'], dir).status, 0);
+
+  const md = join(dir, 'paper.md');
+  const json = join(dir, 'paper.json');
+  writeFileSync(md, '# Title\n\nBody.');
+  assert.equal(run(['import', md, '-o', json], dir).status, 0);
+  assert.equal(run(['import', md, '-o', json], dir).status, 1);
+  assert.equal(run(['import', md, '-o', json, '--force'], dir).status, 0);
+});
+
+test('help lists --force as a global option, not a build-only one', () => {
+  const result = run(['--help']);
+  assert.equal(result.status, 0);
+  const help = result.stdout;
+  const globalStart = help.indexOf('Global options');
+  const perCommandStart = help.indexOf('Options by command');
+  assert.notEqual(globalStart, -1, 'help must have a global options section');
+  assert.notEqual(perCommandStart, -1, 'help must list options per command');
+  const force = help.indexOf('--force, -y');
+  assert.ok(force > globalStart && force < perCommandStart, '--force belongs to the global section');
+});
+
+test('--help is honoured after a command name', () => {
+  // `build --help` used to treat the flag as a content path.
+  const result = run(['build', '--help']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Options by command/);
+});
+
+test('build reports the type the content declares', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'openthesis-cli-'));
+  const input = join(dir, 'journal.json');
+  writeFileSync(input, JSON.stringify({
+    type: 'journal',
+    meta: { title: 'Label', authors: [{ name: 'A', affiliations: [{ institution: 'U' }] }] },
+    sections: [{
+      id: 'intro', type: 'introduction', title: '1 Introduction',
+      content: [{ type: 'paragraph', text: 'Body.' }],
+    }],
+  }));
+
+  const result = run(['build', input, '-o', join(dir, 'out.docx')]);
+  assert.equal(result.status, 0, result.stderr);
+  // The removed ternary chain relabelled 'journal' as 'journal article'.
+  assert.match(result.stdout, /✅ journal built successfully!/);
+});
+
+test('build does not guess a legacy document type from its title', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'openthesis-cli-'));
+  const input = join(dir, 'legacy.json');
+  // Legacy JSON carries no `type` field; the removed chain read 期刊 out of the
+  // title and reported the document as a "journal article".
+  writeFileSync(input, JSON.stringify({ title: '期刊投稿说明', cover_blocks: [], body_blocks: [] }));
+
+  const result = run(['build', input, '-o', join(dir, 'out.docx')]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /document built successfully!/);
+  assert.doesNotMatch(result.stdout, /journal article/);
+});
