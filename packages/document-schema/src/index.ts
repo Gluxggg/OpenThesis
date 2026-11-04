@@ -208,6 +208,17 @@ export interface ParagraphFormatting {
    * ran on from the previous one.
    */
   pageBreakBefore?: boolean;
+  /**
+   * `w:keepNext` — keep this paragraph on the same page as the next one.
+   *
+   * Parsed by the template parser and merged into every resolved style, but the
+   * schema had no field to carry it, so it was dropped on the way to the
+   * renderer. A heading that declares it is exactly the one that would otherwise
+   * strand itself at the foot of a page, separated from the body it introduces.
+   */
+  keepNext?: boolean;
+  /** `w:keepLines` — do not split this paragraph across a page boundary. */
+  keepLines?: boolean;
 }
 
 // ════════════════════════════════════════════════════════════

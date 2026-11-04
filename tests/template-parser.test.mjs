@@ -506,3 +506,26 @@ test('infers a reusable template from a text-based PDF', async () => {
 test('asks for OCR when a PDF has no extractable text', async () => {
   await assert.rejects(() => parsePdfTemplate(buildTestPdf({ text: false })), /run OCR first/);
 });
+
+test('carries w:keepNext and w:keepLines through to the style', async () => {
+  // Both flags were parsed into RawParagraphProps and merged into every resolved
+  // style, but `ParagraphFormatting` had no field to hold them, so they were
+  // dropped before the renderer — and a heading that strands itself at the foot
+  // of a page is exactly what `keepNext` exists to prevent.
+  const zip = new JSZip();
+  zip.file('word/styles.xml', `<?xml version="1.0"?>
+    <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>
+      <w:style w:type="paragraph" w:styleId="h"><w:name w:val="heading 1"/>
+        <w:pPr><w:outlineLvl w:val="0"/><w:keepNext/><w:keepLines/></w:pPr>
+      </w:style>
+    </w:styles>`);
+  zip.file('word/document.xml', `<?xml version="1.0"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:p><w:pPr><w:pStyle w:val="h"/></w:pPr><w:r><w:t>H</w:t></w:r></w:p>
+    </w:body></w:document>`);
+
+  const template = await parseTemplate(await zip.generateAsync({ type: 'nodebuffer' }), { documentType: 'thesis' });
+  assert.equal(template.styles.h.paragraph.keepNext, true);
+  assert.equal(template.styles.h.paragraph.keepLines, true);
+});
