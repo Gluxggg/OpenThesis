@@ -99,6 +99,20 @@ export interface PageSettings {
   columns?: number;
   columnGutter?: number;
   /**
+   * `w:docGrid` — the line grid the template snaps text to.
+   *
+   * The university template snaps the body to a 312-twip line grid
+   * (`type="linesAndChars"`). The writer library always emits its own
+   * `linePitch="360"`, so a generated page broke lines at different places than
+   * the template did. The renderer rewrites the grid into the generated section
+   * properties from these values.
+   */
+  docGrid?: {
+    type?: string;
+    linePitch?: number;
+    charSpace?: number;
+  };
+  /**
    * `w:pgNumType/@w:fmt`: the format this section numbers its pages in. The
    * template declares `upperRoman` for the front matter and nothing for the
    * body, and a section that restarts without naming a format is decimal.
@@ -250,7 +264,14 @@ export type StyleRole = BlockType
   | 'table_header' | 'figure_caption' | 'table_caption'
   | 'section_heading' | 'reference_item'
   | 'cover_title' | 'cover_line' | 'cover_meta'
-  | 'toc_entry';
+  | 'toc_entry'
+  /**
+   * Journal front matter. These carry no block of their own — they are generated
+   * from `JournalMeta` — so without a role they could only be hardcoded fonts.
+   * With one they resolve through the template like every other block.
+   */
+  | 'journal_title' | 'journal_author' | 'journal_affiliation'
+  | 'journal_abstract' | 'journal_keywords';
 
 export interface HeadingBlock extends BaseBlock {
   type: 'heading1' | 'heading2' | 'heading3' | 'heading4';

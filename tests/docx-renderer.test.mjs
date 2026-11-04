@@ -1156,3 +1156,85 @@ test('a caller-supplied figure width is clamped to the printable page', async ()
   assert.ok(widthPx <= 620, `expected the width to be clamped, got ${widthPx.toFixed(0)} px`);
   assert.ok(Number(extent[2]) > 0, 'expected a positive height');
 });
+
+test('the package carries the template TOC entry styles', async () => {
+  // The renderer emits a real TOC field; Word builds its entries with the
+  // TOC1/TOC2/TOC3 styles. Those ids did not exist in the generated package, so
+  // the template's own directory typography was parsed into `toc_entry` and then
+  // never applied.
+  const tpl = structuredClone(template);
+  tpl.styles.TOC1.font.size = 27;
+  tpl.styles.TOC1.paragraph.alignment = 'left';
+
+  const buffer = await renderDocument({
+    template: tpl,
+    document: {
+      type: 'thesis', meta: { title: 'Contents' }, cover: [],
+      sections: [
+        { id: 'toc', type: 'toc', title: '目录', content: [] },
+        { id: 'c1', type: 'chapter', title: 'Chapter', content: [{ type: 'paragraph', text: 'Body' }] },
+      ],
+    },
+  });
+  const zip = await JSZip.loadAsync(buffer);
+  const stylesXml = await zip.file('word/styles.xml').async('string');
+
+  const toc1 = stylesXml.match(/<w:style[^>]*w:styleId="TOC1"[\s\S]*?<\/w:style>/)?.[0];
+  assert.ok(toc1, 'expected a TOC1 paragraph style in the package');
+  assert.match(toc1, /<w:sz w:val="27"\/>/);
+  assert.match(stylesXml, /w:styleId="TOC2"/);
+  assert.match(stylesXml, /w:styleId="TOC3"/);
+});
+
+test('the template document grid replaces the writer library default', async () => {
+  // The writer always emits its own `linePitch="360"`. A template that snaps text
+  // to a different grid gets its own values written into the generated section
+  // properties, or a page breaks lines where the template would not.
+  const tpl = structuredClone(template);
+  tpl.page.docGrid = { type: 'linesAndChars', linePitch: 312, charSpace: 0 };
+
+  const buffer = await renderDocument({
+    template: tpl,
+    document: {
+      type: 'thesis', meta: { title: 'Grid' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'Chapter', content: [{ type: 'paragraph', text: 'Body' }] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /<w:docGrid w:type="linesAndChars" w:linePitch="312" w:charSpace="0"\/>/);
+  assert.doesNotMatch(xml, /w:linePitch="360"/);
+});
+
+test('a journal front matter resolves through the template instead of hardcoded fonts', async () => {
+  // The title, authors, affiliations, abstract and keywords were built from
+  // literal font/size/spacing values, so a journal rendered from a journal
+  // template ignored that template entirely.
+  const tpl = structuredClone(template);
+  // Give each journal role a unique size through the style the role resolves to.
+  tpl.styles.JournalTitle = {
+    font: { name: 'Times New Roman', eastAsia: '黑体', size: 41, bold: true },
+    paragraph: { alignment: 'left', spaceBefore: 0, spaceAfter: 0 },
+    lineSpacing: 300,
+  };
+  tpl.styleRoles.JournalTitle = 'journal_title';
+  tpl.roleWinners.journal_title = 'JournalTitle';
+
+  const buffer = await renderDocument({
+    template: tpl,
+    document: {
+      type: 'journal',
+      meta: {
+        title: 'A title',
+        authors: [{ name: 'A. Author', affiliations: [{ institution: 'Somewhere' }] }],
+        keywords: ['one', 'two'],
+      },
+      sections: [{ id: 'intro', type: 'introduction', title: 'Introduction', content: [] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+
+  const at = xml.indexOf('A title');
+  assert.ok(at >= 0, 'expected the article title in the output');
+  const lastSize = [...xml.slice(0, at).matchAll(/<w:sz w:val="(\d+)"\/>/g)].pop();
+  assert.equal(Number(lastSize?.[1]), 41, 'the title should carry the template role size');
+});

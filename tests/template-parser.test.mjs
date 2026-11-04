@@ -529,3 +529,70 @@ test('carries w:keepNext and w:keepLines through to the style', async () => {
   assert.equal(template.styles.h.paragraph.keepNext, true);
   assert.equal(template.styles.h.paragraph.keepLines, true);
 });
+
+test('converts character units with the inherited font size, not the own style', async () => {
+  // `*Chars` / `*Lines` are hundredths of a character or a line, and a character
+  // is as wide as the style's *effective* size. The conversion used to run while
+  // the style bag was being read — before the `basedOn` chain was resolved — so
+  // a style that inherits 10.5pt converted with the 12pt fallback: 480 twips
+  // where 420 is right.
+  const zip = new JSZip();
+  zip.file('word/styles.xml', `<?xml version="1.0"?>
+    <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>
+      <w:style w:type="paragraph" w:default="1" w:styleId="base">
+        <w:name w:val="Normal"/><w:rPr><w:sz w:val="21"/></w:rPr>
+      </w:style>
+      <w:style w:type="paragraph" w:styleId="child">
+        <w:name w:val="Body Text"/><w:basedOn w:val="base"/>
+        <w:pPr><w:ind w:firstLineChars="200"/></w:pPr>
+      </w:style>
+      <w:style w:type="paragraph" w:styleId="own">
+        <w:name w:val="Own Size"/><w:rPr><w:sz w:val="21"/></w:rPr>
+        <w:pPr><w:ind w:firstLineChars="200"/></w:pPr>
+      </w:style>
+      <w:style w:type="paragraph" w:styleId="explicit">
+        <w:name w:val="Explicit Twips"/><w:basedOn w:val="child"/>
+        <w:pPr><w:ind w:firstLine="999"/></w:pPr>
+      </w:style>
+    </w:styles>`);
+  zip.file('word/document.xml', `<?xml version="1.0"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:p><w:pPr><w:pStyle w:val="child"/></w:pPr><w:r><w:t>x</w:t></w:r></w:p>
+    </w:body></w:document>`);
+
+  const template = await parseTemplate(await zip.generateAsync({ type: 'nodebuffer' }), { documentType: 'thesis' });
+
+  // 10.5pt (21 half-points) × two characters = 420 twips. The old code produced
+  // 480 because it converted with the 12pt fallback.
+  assert.equal(template.styles.child.font.size, 21);
+  assert.equal(template.styles.child.paragraph.firstLineIndent, 420);
+
+  // A style that declares the size itself converts identically.
+  assert.equal(template.styles.own.paragraph.firstLineIndent, 420);
+
+  // An explicit twips value overrides the inherited character form, rather than
+  // losing to it in the later conversion.
+  assert.equal(template.styles.explicit.paragraph.firstLineIndent, 999);
+});
+
+test('reads w:docGrid from the section properties', async () => {
+  // The writer library always emits its own line grid, so the template's grid has
+  // to survive parsing for the renderer to have anything to write back.
+  const zip = new JSZip();
+  zip.file('word/styles.xml', `<?xml version="1.0"?>
+    <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>
+      <w:style w:type="paragraph" w:styleId="a"><w:name w:val="Normal"/><w:rPr><w:sz w:val="24"/></w:rPr></w:style>
+    </w:styles>`);
+  zip.file('word/document.xml', `<?xml version="1.0"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:sectPr><w:pgSz w:w="11906" w:h="16838"/>
+        <w:pgMar w:top="1701" w:bottom="1134" w:left="1701" w:right="1701"/>
+        <w:docGrid w:type="linesAndChars" w:linePitch="312" w:charSpace="0"/>
+      </w:sectPr>
+    </w:body></w:document>`);
+
+  const template = await parseTemplate(await zip.generateAsync({ type: 'nodebuffer' }), { documentType: 'thesis' });
+  assert.deepEqual(template.page.docGrid, { type: 'linesAndChars', linePitch: 312, charSpace: 0 });
+});
