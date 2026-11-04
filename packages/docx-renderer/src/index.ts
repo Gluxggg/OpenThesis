@@ -89,6 +89,16 @@ export interface RenderOptions {
   showPageNumbers?: boolean;
   /** Base directory of content file for relative paths (e.g. image paths) */
   contentDir?: string;
+  /**
+   * Restart each part's page numbering at 1 (default true).
+   *
+   * Turn it off only to work around a viewer. LibreOffice — and any viewer built
+   * on its DOCX import, which may include WPS — drops a section's tables entirely
+   * when that section declares `w:pgNumType w:start="1"` and is not the first
+   * section. The attribute is what makes the body start at page 1, so it stays on
+   * by default; this switch trades that numbering for tables that render there.
+   */
+  pageNumberRestart?: boolean;
 }
 
 // ── Fallback Styles ───────────────────────────────────────
@@ -939,23 +949,13 @@ function renderTable(
     children: block.headers.map((h, ci) =>
       new TableCell({
         width: { size: colWidths[ci], type: WidthType.DXA },
-        borders: templateDrawsGrid
-          ? {
-              top: BO,
-              bottom: BI,
-              left: ci === 0 ? BLeft : BInsideV,
-              right: ci === colCount - 1 ? BRight : BInsideV,
-            }
-          : isThreeLine
-            ? { top: BO, bottom: BI, left: NO, right: NO }
-            : (showGrid
-              ? {
-                  top: BO,
-                  bottom: BO,
-                  left: ci === 0 ? BO : BI,
-                  right: ci === colCount - 1 ? BO : BI,
-                }
-              : { top: NO, bottom: NO, left: NO, right: NO }),
+        // Only the horizontal rules live on the cell: a vertical rule declared
+        // here paints over the black rule at the column join, which is what put
+        // notches in the header rule. The table-level borders supply verticals.
+        borders: {
+          top: BO,
+          bottom: templateDrawsGrid ? BBottom : BI,
+        },
         shading: showShading
           ? {
               fill: template.tableFormat?.headerFill ?? 'D9D9D9',
@@ -1002,19 +1002,11 @@ function renderTable(
       children: block.headers.map((_, ci) =>
         new TableCell({
           width: { size: colWidths[ci], type: WidthType.DXA },
-          borders: isThreeLine ? {
+          // Horizontal only, for the same reason as the header row.
+          borders: {
             top: NO,
-            bottom: isLast ? BO : NO,
-            left: NO,
-            right: NO,
-          } : (showGrid ? {
-            top: BI,
-            bottom: isLast ? BO : BI,
-            left: ci === 0 ? BO : BI,
-            right: ci === colCount - 1 ? BO : BI,
-          } : {
-            top: NO, bottom: NO, left: NO, right: NO,
-          }),
+            bottom: isLast ? BBottom : NO,
+          },
           children: [
             new Paragraph({
               children: styledRuns(row[ci] ?? '', bodyStyle),
@@ -2362,7 +2354,11 @@ function isRomanFormat(format?: PageNumberFormat): boolean {
  * the template is silent, the requirement the guide states applies: the front
  * matter is Roman from I, and the body restarts at 1 in decimal.
  */
-function partPageNumbers(role: DocumentPartRole, settings: PageSettings): IPageNumberTypeAttributes {
+function partPageNumbers(
+  role: DocumentPartRole,
+  settings: PageSettings,
+  restart: boolean,
+): IPageNumberTypeAttributes {
   if (role === 'cover') {
     // Nothing prints on the cover; the format only decides what the *next*
     // section continues from, so an undeclared one is left undeclared.
@@ -2371,12 +2367,12 @@ function partPageNumbers(role: DocumentPartRole, settings: PageSettings): IPageN
   if (role === 'front_matter') {
     return {
       formatType: settings.pageNumberFormat ?? 'upperRoman',
-      start: settings.pageNumberStart ?? 1,
+      ...(restart ? { start: settings.pageNumberStart ?? 1 } : {}),
     };
   }
   return {
     formatType: settings.pageNumberFormat ?? 'decimal',
-    start: settings.pageNumberStart ?? 1,
+      ...(restart ? { start: settings.pageNumberStart ?? 1 } : {}),
   };
 }
 
@@ -2595,6 +2591,7 @@ function buildPartSection(
     evenHeaderText?: string;
     variables?: Record<string, string | undefined>;
     showPageNumbers: boolean;
+    pageNumberRestart: boolean;
   },
 ): { section: ISectionOptions; evenReference: boolean } {
   const settings = applyPageOverride(partSettings(part.role, sections, template), part.page);
@@ -2616,7 +2613,7 @@ function buildPartSection(
 
   const section: ISectionOptions = {
     properties: {
-      ...pageProperties(settings, partPageNumbers(part.role, settings)),
+      ...pageProperties(settings, partPageNumbers(part.role, settings, options.pageNumberRestart)),
       // A `w:type="first"` reference does nothing without `w:titlePg`.
       ...(headers?.first || footers?.first ? { titlePage: true } : {}),
     },
@@ -2662,6 +2659,7 @@ function buildSingleSection(
  */
 export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   const { template, document: doc, headerText, showPageNumbers = true, contentDir } = options;
+  const pageNumberRestart = options.pageNumberRestart ?? true;
 
   // Start every render from a cold style cache: a caller that mutates the
   // template between renders must see its own edit, and the cache is otherwise
@@ -2709,6 +2707,7 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
           // part can only carry its author's sample title, which must not print.
           evenHeaderText: doc.meta.title,
           variables: headVariables,
+          pageNumberRestart,
           showPageNumbers,
         });
         sections.push(built.section);

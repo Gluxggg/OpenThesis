@@ -622,3 +622,35 @@ REF      [[表1-1]]        became a field; with no {\field} viewer the fallback 
 ```
 
 `pnpm check`: 177 tests, all passing.
+
+---
+
+## 15. What the sample thesis exposed, and the fixes that followed
+
+Rendering the repository's own `examples/sample-thesis.md` through the real CLI
+and looking at the pages found two defects the earlier rounds had not.
+
+| # | What the page showed | Cause | Status |
+|---|---|---|---|
+| W-1 | 表 2-1 printed its caption and then **nothing**: the table was gone | The V-2 defect from §14 — `w:pgNumType w:start="1"` on a non-first section makes LibreOffice drop that section's tables. The sample has a cover, so it hit it every time | **Made avoidable.** `RenderOptions.pageNumberRestart` (default `true`) and the CLI flag `build --no-page-restart` let a caller trade the body's page-number restart for tables that render there. Default stays correct-for-Word |
+| W-2 | The header rule of a three-line table was **notched** where the columns join | Each cell declared a white vertical rule, which paints over the black horizontal rule at the junction | Fixed — cells now declare only the horizontal rules; the verticals come from the table level, where a white hairline sits behind nothing |
+
+### Why a flag rather than a "fix"
+
+W-1 is a viewer defect: the attribute is required for the body to start at page 1
+and Word honours it. Removing it by default would make every thesis's page
+numbers wrong. The flag exists so a user who must preview in LibreOffice can do
+so without losing their tables, and it is documented as a viewer workaround
+rather than an improvement.
+
+### Verified on the real sample
+
+```
+cover                    centred tiers, no page number, no running head     OK
+body page 1              chapter heading, running head, page number 1         OK
+body page 2              图2-1 with its caption, 表2-1 as a three-line table  OK
+                          with a continuous header rule
+                          display equation as native OMML                     OK
+```
+
+`pnpm check`: 177 tests, all passing.
