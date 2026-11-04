@@ -9,7 +9,7 @@ import {
   Document, Paragraph, TextRun, Table, TableRow, TableCell,
   Header, Footer, PageNumber, PageBreak,
   AlignmentType,
-  BorderStyle, WidthType, ShadingType, LevelFormat,
+  BorderStyle, WidthType, ShadingType, LevelFormat, TableLayoutType,
   XmlComponent,
   convertMillimetersToTwip, Packer, LineRuleType, PageOrientation,
   ImageRun,
@@ -776,7 +776,8 @@ function styledRuns(
     }
 
     if (match[2]) {
-      runs.push(crossReferenceField(`${match[2]}${match[3].trim()}`));
+      const resolved = resolveReferenceLabel(`${match[2]}${match[3].trim()}`);
+      runs.push(resolved === undefined ? styledRun(`[[${match[2]}${match[3].trim()}]]`, style, forceBold, customSize) : crossReferenceField(resolved));
     } else {
       const mathLatex = match[1].trim();
       try {
@@ -845,10 +846,15 @@ function renderTable(
     1200,
     (page?.width ?? 11906) - (page?.margins?.left ?? 0) - (page?.margins?.right ?? 0),
   );
-  const colWidths = block.columnWidths ?? Array.from(
-    { length: colCount },
-    () => Math.floor(printableWidth / colCount),
-  );
+  // Column widths, in order of authority: the content file, the template's own
+  // table when it has the same number of columns, then an equal split of the
+  // printable width. The template's widths only mean something at the same
+  // column count — its 12-column example says nothing about a 2-column table.
+  const templateColumns = template.tableFormat?.columnWidths;
+  const colWidths = block.columnWidths
+    ?? (templateColumns && templateColumns.length === colCount
+      ? templateColumns
+      : Array.from({ length: colCount }, () => Math.floor(printableWidth / colCount)));
   const tableWidth = colWidths.reduce((sum, width) => sum + width, 0);
 
   // Table typography comes from the template like every other block, so a
@@ -1023,6 +1029,19 @@ function renderTable(
   });
 
   const table = new Table({
+    // `w:jc` and `w:tblLayout` from the template. A template that centres its
+    // tables and fixes its column widths said so; the renderer used to drop both.
+    ...(template.tableFormat?.alignment
+      ? { alignment: mapAlignment(template.tableFormat.alignment) }
+      : {}),
+    ...(template.tableFormat?.layout === 'fixed'
+      ? { layout: TableLayoutType.FIXED }
+      : template.tableFormat?.layout === 'autofit'
+        ? { layout: TableLayoutType.AUTOFIT }
+        : {}),
+    // Emitting the grid explicitly keeps `w:gridCol` in step with the cell
+    // widths; without it the two disagree and Word re-lays the table out.
+    columnWidths: colWidths,
     // Declare the same total the cells declare; a 100% table width alongside
     // absolute cell widths is contradictory OOXML.
     width: { size: tableWidth, type: WidthType.DXA },
@@ -1131,6 +1150,9 @@ function renderFigure(
   }
 
   const captionStyle = resolveStyle(template, 'figure_caption', docType);
+  // Where the template puts its figures. The renderer always centred them; a
+  // template whose drawings sit elsewhere said so through its own paragraph.
+  const figureAlignment = mapAlignment(template.imageFormat?.alignment) ?? AlignmentType.CENTER;
   const captionSpacing = lineStyle(captionStyle, 312);
 
   // ImageRun sizes are CSS pixels while the printable width is in twips
@@ -1190,7 +1212,7 @@ function renderFigure(
             type,
           }),
         ],
-        alignment: AlignmentType.CENTER,
+        alignment: figureAlignment,
         spacing: { before: 120, after: 120, line: 312 },
       });
       // 图题 follows the figure and carries the role's own 段前/段后 (`u4`: 10/10
@@ -1226,10 +1248,10 @@ children: [
   // WebP reaches here because `detectImageType` returns null and the extension
   // wins). Two different problems deserve two different messages.
   const reason = existsSync(imgPath) ? '无法嵌入图片' : '未找到图片';
-  return [new Paragraph({
+  const placeholder = new Paragraph({
     children: [
       new TextRun({
-        text: `[图: ${block.caption} (${reason}: ${block.path})]`,
+        text: `[${reason}: ${block.path}]`,
         size: captionStyle.font.size,
         font: {
           ascii: captionStyle.font.name,
@@ -1240,9 +1262,32 @@ children: [
         italics: true,
       }),
     ],
-    alignment: AlignmentType.CENTER,
+    alignment: figureAlignment,
     spacing: { before: 120, after: 120, ...captionSpacing },
-  })];
+  });
+
+  // The caption is emitted even when the image is not, so the figure keeps its
+  // number and its bookmark and a `[[图2-1]]` reference still resolves.
+  const caption = new Paragraph({
+    children: [
+      ...(block.number
+        ? [
+            captionBookmarkStart(block.number, nextBookmarkId()),
+            styledRun(block.number, captionStyle),
+            captionBookmarkEnd(bookmarkCounter),
+            styledRun(captionText(block.number, block.caption).slice(block.number.length), captionStyle),
+          ]
+        : styledRuns(captionText(block.number, block.caption), captionStyle)),
+    ],
+    alignment: mapAlignment(captionStyle.paragraph.alignment),
+    spacing: {
+      before: captionStyle.paragraph.spaceBefore,
+      after: captionStyle.paragraph.spaceAfter,
+      ...captionSpacing,
+    },
+  });
+
+  return [placeholder, caption];
 }
 
 function renderSpacer(block: SpacerBlock): Paragraph[] {
@@ -2493,11 +2538,16 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   // keyed only by the template's identity.
   STYLE_CACHE.delete(template);
   resetBookmarks();
+  resetCaptionIndex();
 
   // Shared across the whole document so list numbering instances stay unique.
   const state = createRenderState();
 
   // The running head a template without header parts falls back to.
+  // Captions are numbered before anything renders: a `[[表#id]]` reference needs
+  // the number that the caption will carry, and it may appear above the caption.
+  numberCaptionsInDocument(doc);
+
   const generatedHeader = headerText
     || (doc.type === 'official' ? '' : `${template.meta.organization}${doc.type === 'journal' ? '学术论文' : '学位论文'}`);
 
@@ -2932,6 +2982,32 @@ function captionBookmarkEnd(id: number): XmlComponent {
  * Written as a `w:fldSimple` with the result in its run, so a viewer that does
  * not evaluate fields still shows the number rather than an empty gap.
  */
+/**
+ * Turn a reference token into the label a caption actually carries.
+ *
+ * `表#tab1` names a block by id, which is the form that survives automatic
+ * numbering — the author cannot know that the table will become 表3-1. A literal
+ * `表3-1` is taken at face value. Either way an unknown label is reported: a REF
+ * field pointing at a bookmark that does not exist makes Word print
+ * "Error! Reference source not found." and nothing said so before.
+ */
+function resolveReferenceLabel(raw: string): string | undefined {
+  const label = raw.trim();
+  if (label.includes('#')) {
+    const resolved = captionIndex.byId.get(label);
+    if (!resolved) {
+      console.warn(`Cross-reference to "${label}" matches no table or figure id; the reference will be left as text.`);
+      return undefined;
+    }
+    return resolved;
+  }
+  if (!captionIndex.labels.has(label)) {
+    console.warn(`Cross-reference to "${label}" matches no caption in this document; the reference will be left as text.`);
+    return undefined;
+  }
+  return label;
+}
+
 function crossReferenceField(label: string): XmlComponent {
   const instr = ` REF ${captionBookmark(label)} \\h `;
   return new RawElement(
@@ -2954,6 +3030,79 @@ function nextBookmarkId(): number {
 function resetBookmarks(): void {
   bookmarkCounter = 0;
 }
+
+/**
+ * Every caption in the document, and the numbers they ended up with.
+ *
+ * A caption with no `number` used to render with no number at all, which made it
+ * unreachable from a cross-reference. Captions are numbered here instead, per
+ * chapter, in document order — the standard 表1-1 / 图2-3 form — and a reference
+ * can name either that label (`[[表1-1]]`) or the block's id (`[[表#tab1]]`).
+ */
+interface CaptionIndex {
+  labels: Set<string>;
+  byId: Map<string, string>;
+}
+
+let captionIndex: CaptionIndex = { labels: new Set(), byId: new Map() };
+
+
+function resetCaptionIndex(): void {
+  captionIndex = { labels: new Set(), byId: new Map() };
+}
+
+type NumberedBlock = { type?: string; number?: string; id?: string };
+
+/** Number every table and figure in one block list that brought no number. */
+function numberCaptions(blocks: NumberedBlock[], chapter: number, counters: Map<string, number>): void {
+  for (const block of blocks) {
+    const kind = block.type === 'table' ? '表' : block.type === 'figure' ? '图' : undefined;
+    if (!kind) continue;
+    if (!block.number) {
+      const key = `${chapter}|${kind}`;
+      const seq = (counters.get(key) ?? 0) + 1;
+      counters.set(key, seq);
+      block.number = chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`;
+    }
+    captionIndex.labels.add(block.number);
+    if (block.id) captionIndex.byId.set(`${kind}#${block.id}`, block.number);
+  }
+}
+
+/**
+ * Walk the whole document in reading order and number its captions.
+ *
+ * Only sections that are chapters advance the chapter number; a 摘要 or 目录
+ * section between them must not turn 表1-1 into 表2-1.
+ */
+function numberCaptionsInDocument(doc: OpenThesisDocument): void {
+  const counters = new Map<string, number>();
+  if (doc.type === 'thesis') {
+    numberCaptions((doc.cover ?? []) as NumberedBlock[], 0, counters);
+    let chapter = 0;
+    for (const section of doc.sections ?? []) {
+      if (section.type === 'chapter') chapter += 1;
+      numberCaptions(section.content as NumberedBlock[], chapter, counters);
+      for (const sub of section.subsections ?? []) {
+        numberCaptions(sub.content as NumberedBlock[], chapter, counters);
+      }
+    }
+    for (const appendix of doc.backMatter?.appendices ?? []) {
+      numberCaptions(appendix.content as NumberedBlock[], chapter, counters);
+    }
+    return;
+  }
+  if (doc.type === 'journal') {
+    let chapter = 0;
+    for (const section of doc.sections ?? []) {
+      chapter += 1;
+      numberCaptions(section.content as NumberedBlock[], chapter, counters);
+    }
+    return;
+  }
+  numberCaptions((doc as { body?: NumberedBlock[] }).body ?? [], 0, counters);
+}
+
 
 // ── Utility ───────────────────────────────────────────────
 

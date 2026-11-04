@@ -527,3 +527,46 @@ text]`. Two traps:
   or TypeScript rejects the assignment.
 
 `pnpm check`: 170 tests, all passing.
+
+---
+
+## 13. Table and figure series, part two
+
+The audit for §12 asked a different question: of the fields that were *parsed*,
+how many were actually *used*? Half of them were not.
+
+| Field | Parsed in §12 | Used in §12 | Used now |
+|---|---|---|---|
+| `tableFormat.borders` | ✅ | ✅ | ✅ |
+| `tableFormat.headerFill` / `headerSize` / `headerBold` | ✅ | ✅ | ✅ |
+| `tableFormat.columnWidths` | ✅ | ❌ | ✅ — when the column count matches |
+| `tableFormat.alignment` (`w:jc`) | ✅ | ❌ | ✅ |
+| `tableFormat.layout` (`w:tblLayout`) | ✅ | ❌ | ✅ |
+| `imageFormat.alignment` | ✅ | ❌ | ✅ |
+
+Parsing a value and not using it is worse than not parsing it: the template JSON
+claims the template was understood.
+
+### What the four fixes changed
+
+- **Column widths.** The template's grid applies only when the table has the
+  same number of columns. Its 12-column example says nothing about a 2-column
+  table, so an unmatched table still splits the printable width evenly.
+- **Alignment and layout.** `w:jc` and `w:tblLayout` now reach `w:tblPr`, and the
+  grid is emitted explicitly so `w:gridCol` stays in step with the cell widths.
+- **Figure alignment.** A template that puts its figures left or right is honoured
+  instead of every drawing being centred.
+
+### Three more defects the audit turned up
+
+| # | Finding | Evidence | Status |
+|---|---|---|---|
+| T-1 | A caption with no `number` rendered with no number at all, so it could never be the target of a reference. | a table with `caption: '无编号表'` and no `number` emitted no number | Fixed — captions are numbered per chapter in document order (表1-1, 图2-1), front matter outside a chapter numbers as 表1, and a chapter boundary resets the sequence |
+| T-2 | A reference to a caption that does not exist emitted a `REF` field pointing at a bookmark that was never created. Word prints *"Error! Reference source not found."* and nothing said so. | `[[表9-9]]` with no such caption produced a field and no warning | Fixed — an unknown label warns and the reference is left as the literal text `[[表9-9]]` |
+| T-3 | A missing image emitted only a placeholder line: no caption, no number, no bookmark, so `[[图2-1]]` could not reach it. | a `figure` with an unreadable path produced `[未找到图片: …]` and nothing else | Fixed — the placeholder is followed by the caption, number and bookmark, so the figure keeps its identity even when its pixels are gone |
+
+Also added: `[[表#id]]` resolves through a block's `id` rather than its final
+number. The author cannot know a table will become 表3-1, so naming it by id is
+the form that survives automatic numbering.
+
+`pnpm check`: 175 tests, all passing.
