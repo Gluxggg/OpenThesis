@@ -215,3 +215,19 @@ export function formatReference(ref: Reference): string {
   const body = joinParts([authors, titleBlock, tail, identifier]);
   return body ? `${body}.` : '';
 }
+
+/**
+ * Count words the way a word limit counts them.
+ *
+ * A Chinese abstract is counted in characters by its own convention and an
+ * English one in words, so both are offered: `\s+` splits a Latin sentence,
+ * and each CJK character counts as one.
+ */
+export function countWords(text: string): number {
+  const cjk = [...text].filter(char => /[\u3400-\u9fff\uf900-\ufaff]/.test(char)).length;
+  const latin = text
+    .replace(/[\u3400-\u9fff\uf900-\ufaff]/g, ' ')
+    .split(/\s+/)
+    .filter(token => /[A-Za-z0-9]/.test(token)).length;
+  return cjk + latin;
+}

@@ -19,7 +19,9 @@ const DOCUMENT_TYPES = ['thesis', 'journal', 'official'] as const;
 
 const THESIS_SECTION_TYPES = [
   'chapter', 'abstract', 'acknowledgement', 'toc',
-  'list_of_figures', 'list_of_tables', 'references', 'appendix',
+  'list_of_figures', 'list_of_tables', 'nomenclature', 'references', 'appendix',
+  // A subsection of a chapter is a heading too, and the schema names it `section`.
+  'section', 'subsection', 'subsubsection',
 ] as const;
 
 const THESIS_DEGREES = ['bachelor', 'master', 'doctor'] as const;
@@ -35,7 +37,10 @@ const OFFICIAL_CATEGORIES = [
   '通报', '议案', '公告', '命令', '决议', '公报',
 ] as const;
 
-const DOCUMENT_CATEGORIES = ['journal', 'book', 'conference', 'thesis', 'web', 'standard', 'other'] as const;
+const DOCUMENT_CATEGORIES = [
+  'journal', 'book', 'chapter', 'conference', 'thesis', 'standard', 'patent',
+  'report', 'newspaper', 'electronic', 'database', 'software', 'archive', 'other',
+] as const;
 
 /** Block types that need only the listed non-empty string fields. */
 const REQUIRED_STRING_FIELDS: Record<string, readonly string[]> = {
@@ -214,6 +219,29 @@ function validateJournal(input: Record<string, unknown>, report: Report): void {
       validateReferences(backMatter.references, 'backMatter.references', report);
     }
   }
+
+  // The journal's fixed opening table, when its template asks for one. The rows
+  // are content, so a row with no value is an incomplete submission.
+  const specifications = input.specifications;
+  if (specifications !== undefined) {
+    if (!Array.isArray(specifications)) {
+      report('specifications', `must be an array, received ${describe(specifications)}`);
+    } else {
+      specifications.forEach((row, index) => {
+        const path = `specifications[${index}]`;
+        if (!isObject(row)) {
+          report(path, `expected an object, received ${describe(row)}`);
+          return;
+        }
+        if (!isNonEmptyString(row.label)) {
+          report(`${path}.label`, `must be a non-empty string, received ${describe(row.label)}`);
+        }
+        if (!isNonEmptyString(row.value)) {
+          report(`${path}.value`, `must be a non-empty string, received ${describe(row.value)}`);
+        }
+      });
+    }
+  }
 }
 
 function validateOfficial(input: Record<string, unknown>, report: Report): void {
@@ -336,10 +364,18 @@ function validateReferences(value: unknown, path: string, report: Report): void 
       report(referencePath, `expected an object, received ${describe(reference)}`);
       return;
     }
-    for (const field of ['id', 'text'] as const) {
-      if (!isNonEmptyString(reference[field])) {
-        report(`${referencePath}.${field}`, `must be a non-empty string, received ${describe(reference[field])}`);
-      }
+    if (!isNonEmptyString(reference.id)) {
+      report(`${referencePath}.id`, `must be a non-empty string, received ${describe(reference.id)}`);
+    }
+    // A reference is either a written entry (`text`) or the parts GB/T 7714 asks
+    // for. At least one has to be there; a bare `{ id }` prints nothing.
+    const hasText = isNonEmptyString(reference.text);
+    const hasParts = isNonEmptyString(reference.title) || Array.isArray(reference.authors);
+    if (!hasText && !hasParts) {
+      report(`${referencePath}.text`, `a reference needs either text or a title/authors, received ${describe(reference.text)}`);
+    }
+    if (reference.text !== undefined && !isNonEmptyString(reference.text)) {
+      report(`${referencePath}.text`, `must be a non-empty string when given, received ${describe(reference.text)}`);
     }
     const referenceType = reference.type;
     if (referenceType !== undefined && !DOCUMENT_CATEGORIES.includes(referenceType as typeof DOCUMENT_CATEGORIES[number])) {
@@ -473,8 +509,16 @@ function validateTable(value: Record<string, unknown>, path: string, report: Rep
     report(`${path}.headers`, `must be an array of strings, received ${describe(headers)}`);
     return;
   }
+  // A table whose columns are all unnamed is a label/value table — the
+  // Specifications table several journals open with — and renders without a
+  // header row. A table with only some columns unnamed has no sensible layout.
   if (headers.length === 0) {
     report(`${path}.headers`, 'must define at least one column');
+    return;
+  }
+  const blankHeaders = headers.filter(header => header.trim() === '').length;
+  if (blankHeaders > 0 && blankHeaders < headers.length) {
+    report(`${path}.headers`, 'either name every column or leave them all empty for a label/value table');
     return;
   }
 

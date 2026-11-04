@@ -147,6 +147,11 @@ export interface DocumentTemplate {
   tableFormat?: TableFormat;
   /** How the template places its figures, when it has any. */
   imageFormat?: ImageFormat;
+  /**
+   * What this journal requires of a submission, read out of its instruction text.
+   * Present only for a journal template that states its requirements.
+   */
+  requirements?: JournalRequirements;
 }
 
 export interface TemplateMeta {
@@ -622,11 +627,57 @@ export interface ThesisBackMatter {
 // ── 2. JOURNAL ARTICLE (期刊论文) ──────────────────────────
 // ════════════════════════════════════════════════════════════
 
+/**
+ * One row of a journal's Specifications table.
+ *
+ * HardwareX and several other journals open with a fixed two-column table
+ * (Hardware name, Subject area, Hardware type, …) that the author fills in.
+ * The rows are content, the table is layout: the author supplies the values and
+ * the renderer builds the table.
+ */
+export interface SpecificationRow {
+  /** The row label as the journal prints it, e.g. `Hardware name`. */
+  label: string;
+  value: string;
+}
+
+/**
+ * What a journal requires of a submission, beyond layout.
+ *
+ * A template states these in its instruction text — `Title: [Max. 20 words]`,
+ * `Keywords: [At least 3]`, the sections it expects — and a generator that only
+ * reproduces the layout can still hand back a submission the journal rejects.
+ * `parseTemplate` reads them out of the template; `validateJournal` checks the
+ * content against them.
+ */
+export interface JournalRequirements {
+  /** Longest title the journal accepts, in words. */
+  maxTitleWords?: number;
+  /** Longest abstract the journal accepts, in words. */
+  maxAbstractWords?: number;
+  /** Fewest keywords the journal accepts. */
+  minKeywords?: number;
+  /** Fewest references the journal accepts. */
+  minReferences?: number;
+  /**
+   * The sections the journal expects, in the order it prints them. A submission
+   * missing one is incomplete, whatever it looks like.
+   */
+  requiredSections?: string[];
+  /**
+   * The labels of a fixed opening table, e.g. HardwareX's Specifications table.
+   * When present the content supplies the values and the renderer builds the table.
+   */
+  specificationLabels?: string[];
+}
+
 export interface JournalArticle {
   type: 'journal';
   meta: JournalMeta;
   sections: JournalSection[];
   backMatter?: JournalBackMatter;
+  /** Rows of the journal's fixed opening table, when it asks for one. */
+  specifications?: SpecificationRow[];
 }
 
 export interface JournalMeta {
