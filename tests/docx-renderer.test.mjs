@@ -2392,3 +2392,109 @@ test('an English author is turned round to SMITH J form', async () => {
   assert.ok(entries.some(e => e.includes('SMITH J')), 'a name already inverted is left alone');
   assert.ok(entries.some(e => e.includes('张三')), 'a Chinese name is untouched');
 });
+
+// ── A journal article follows journal conventions ─────────
+
+/** Render a one-section journal article and read its XML. */
+async function renderJournal(meta, sections, backMatter) {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'journal',
+      meta: { title: 'A title', authors: [{ name: 'San Zhang', affiliations: [] }], ...meta },
+      sections: sections ?? [{ id: 's', type: 'introduction', title: 'Introduction', content: [{ type: 'paragraph', text: 'x' }] }],
+      backMatter,
+    },
+  });
+  return documentXml(buffer);
+}
+
+test('an English journal labels its captions Table 1 / Figure 1', async () => {
+  // A thesis numbers per chapter and labels in Chinese (表 1-1). A journal numbers
+  // straight through and labels in the article's language.
+  const { xml } = await renderJournal(
+    { language: 'en' },
+    [{ id: 's', type: 'methods', title: 'Methods', content: [
+      { type: 'table', caption: 'Stages', headers: ['A'], data: [['1']] },
+      { type: 'figure', path: 'missing.png', caption: 'Overview' },
+    ] }],
+  );
+  assert.match(xml, /Table 1/);
+  assert.match(xml, /Figure 1/);
+  assert.doesNotMatch(xml, /表 ?1-1/);
+});
+
+test('a Chinese journal keeps the Chinese caption labels', async () => {
+  const { xml } = await renderJournal(
+    { language: 'zh' },
+    [{ id: 's', type: 'methods', title: '方法', content: [
+      { type: 'table', caption: '阶段', headers: ['A'], data: [['1']] },
+    ] }],
+  );
+  // Numbered straight through, so `表 1` rather than `表 1-1`.
+  assert.match(xml, /表 1/);
+  assert.doesNotMatch(xml, /表 1-1/);
+});
+
+test('a journal numbers its equations straight through', async () => {
+  const { xml } = await renderJournal(
+    { language: 'en' },
+    [
+      { id: 'a', type: 'methods', title: 'Methods', content: [{ type: 'equation_numbered', latex: 'a = b' }] },
+      { id: 'b', type: 'results', title: 'Results', content: [{ type: 'equation_numbered', latex: 'c = d' }] },
+    ],
+  );
+  // No chapter to restart at: (1) and (2), not (1-1) and (2-1).
+  assert.match(xml, /\(1\)/);
+  assert.match(xml, /\(2\)/);
+  assert.doesNotMatch(xml, /\(2-1\)/);
+});
+
+test('an English journal prints Abstract and Keywords, not 摘要 and 关键词', async () => {
+  const { xml } = await renderJournal({ language: 'en', abstract: 'An abstract.', keywords: ['a', 'b'] });
+  assert.match(xml, /Abstract\. /);
+  assert.match(xml, /Keywords: /);
+  assert.doesNotMatch(xml, /摘  要/);
+});
+
+test('a journal gets no invented running head', async () => {
+  // A thesis falls back to 「校名学位论文」; a journal has no such convention, and
+  // most journals are submitted without one.
+  const zip = await JSZip.loadAsync(await renderDocument({
+    template,
+    document: {
+      type: 'journal',
+      meta: { title: 'T', authors: [{ name: 'A', affiliations: [] }], language: 'en' },
+      sections: [{ id: 's', type: 'introduction', title: 'Introduction', content: [{ type: 'paragraph', text: 'x' }] }],
+    },
+  }));
+  const headerFiles = Object.keys(zip.files).filter(name => /word\/header\d+\.xml$/.test(name));
+  const texts = await Promise.all(headerFiles.map(async name => zip.file(name).async('string')));
+  const joined = texts.join('');
+  assert.doesNotMatch(joined, /学位论文/, 'no thesis-style running head');
+});
+
+test('a journal citation is indexed like a thesis one', async () => {
+  const { xml } = await renderJournal(
+    { language: 'en' },
+    [{ id: 's', type: 'introduction', title: 'Introduction', content: [{ type: 'paragraph', text: 'See [[引用#r1]].' }] }],
+    { references: [{ id: 'r1', type: 'journal', language: 'en', authors: ['Mary Smith'], title: 'T', container: 'J', year: 2024 }] },
+  );
+  assert.doesNotMatch(xml, /\[\[引用#r1\]\]/, 'the marker must be expanded');
+  assert.match(xml, /<w:vertAlign w:val="superscript"\/>[\s\S]{0,200}?<w:t[^>]*>\[1\]<\/w:t>/);
+});
+
+test('an author with no affiliations renders instead of throwing', async () => {
+  // The validator reports a missing affiliation; the renderer must not turn it
+  // into a TypeError on the way to that report.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'journal',
+      meta: { title: 'T', authors: [{ name: 'A' }] },
+      sections: [{ id: 's', type: 'introduction', title: 'Introduction', content: [{ type: 'paragraph', text: 'x' }] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /A<\/w:t>/);
+});

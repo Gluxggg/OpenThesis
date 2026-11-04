@@ -273,10 +273,44 @@ const OFFICIAL_STYLES: Record<string, ParagraphStyle> = {
   },
 };
 
+/**
+ * Journal fallbacks.
+ *
+ * A journal template that declares no heading styles falls back to these rather
+ * than to the thesis table, whose level-1 heading is centred 黑体 — a thesis
+ * convention. A journal heading is left-aligned and bold, and the body is not
+ * first-line indented.
+ */
+const JOURNAL_STYLES: Record<string, ParagraphStyle> = {
+  ...THESIS_STYLES,
+  heading1: {
+    font: { name: 'Times New Roman', eastAsia: '黑体', size: 28, bold: true },
+    paragraph: { alignment: 'left', spaceBefore: 300, spaceAfter: 120 },
+    lineSpacing: 240,
+  },
+  heading2: {
+    font: { name: 'Times New Roman', eastAsia: '黑体', size: 24, bold: true },
+    paragraph: { alignment: 'left', spaceBefore: 240, spaceAfter: 90 },
+    lineSpacing: 240,
+  },
+  heading3: {
+    font: { name: 'Times New Roman', eastAsia: '宋体', size: 24, bold: true, italic: true },
+    paragraph: { alignment: 'left', spaceBefore: 180, spaceAfter: 60 },
+    lineSpacing: 240,
+  },
+  paragraph: {
+    font: { name: 'Times New Roman', eastAsia: '宋体', size: 21 },
+    paragraph: { alignment: 'justified', firstLineIndent: 480 },
+    lineSpacing: 240,
+  },
+};
+
 // ── Style Resolver ────────────────────────────────────────
 
 function fallbackStyles(docType?: string): Record<string, ParagraphStyle> {
-  return docType === 'official' ? OFFICIAL_STYLES : THESIS_STYLES;
+  if (docType === 'official') return OFFICIAL_STYLES;
+  if (docType === 'journal') return JOURNAL_STYLES;
+  return THESIS_STYLES;
 }
 
 /** Drop keys whose value is `undefined` so they cannot shadow a fallback. */
@@ -2386,7 +2420,9 @@ function renderJournalArticle(
   const affiliationStyle = resolveStyle(template, 'journal_affiliation', 'journal');
   const allAffiliations: string[] = [];
   doc.meta.authors.forEach(author => {
-    author.affiliations.forEach(aff => {
+    // A journal author without an affiliation is a caller mistake the validator
+    // reports; it must not be a TypeError here.
+    (author.affiliations ?? []).forEach(aff => {
       const affStr = `${aff.institution}${aff.department ? ', ' + aff.department : ''}${aff.city ? ', ' + aff.city : ''}`;
       if (!allAffiliations.includes(affStr)) allAffiliations.push(affStr);
     });
@@ -2406,11 +2442,12 @@ function renderJournalArticle(
 
   // 摘要 / 关键词. The bold label is part of the block: it takes the role's font
   // but keeps its own weight, as the hardcoded version did.
+  const articleLanguage = doc.meta.language ?? 'zh';
   const abstractStyle = resolveStyle(template, 'journal_abstract', 'journal');
   if (doc.meta.abstract) {
     children.push(new Paragraph({
       children: [
-        ...styledRuns('摘  要：', abstractStyle, true),
+        ...styledRuns(articleLanguage === 'en' ? 'Abstract. ' : '摘  要：', abstractStyle, true),
         ...styledRuns(doc.meta.abstract, abstractStyle),
       ],
       indent: indentOf(abstractStyle),
@@ -2427,7 +2464,7 @@ function renderJournalArticle(
   if (doc.meta.keywords && doc.meta.keywords.length > 0) {
     children.push(new Paragraph({
       children: [
-        ...styledRuns('关键词：', keywordsStyle, true),
+        ...styledRuns(articleLanguage === 'en' ? 'Keywords: ' : '关键词：', keywordsStyle, true),
         ...styledRuns(doc.meta.keywords.join('；'), keywordsStyle),
       ],
       indent: indentOf(keywordsStyle),
@@ -3028,6 +3065,14 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   const state = createRenderState();
 
   // The running head a template without header parts falls back to.
+  // The caption conventions are fixed once per render, before anything is
+  // numbered: a thesis numbers per chapter in Chinese, a journal numbers straight
+  // through in its own language.
+  captionMode = doc.type === 'journal' ? 'journal' : 'thesis';
+  captionLanguage = doc.type === 'journal'
+    ? ((doc as { meta?: { language?: 'zh' | 'en' } }).meta?.language ?? 'zh')
+    : 'zh';
+
   // Captions are numbered before anything renders: a `[[表#id]]` reference needs
   // the number that the caption will carry, and it may appear above the caption.
   numberCaptionsInDocument(doc);
@@ -3035,17 +3080,27 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   // are the headings, and the headings need their bookmarks assigned up front.
   // The reference list is numbered before the body renders, so a
   // `[[引用#r1]]` in chapter 1 can name an entry listed at the end.
+  // The caption and label conventions are fixed once per render: a thesis
+  // numbers per chapter in Chinese, a journal straight through in its own language.
+  captionMode = doc.type === 'journal' ? 'journal' : 'thesis';
+  captionLanguage = doc.type === 'journal'
+    ? ((doc as { meta?: { language?: 'zh' | 'en' } }).meta?.language ?? 'zh')
+    : 'zh';
   resetCitationIndex();
-  if (doc.type === 'thesis') {
-    (doc.backMatter?.references ?? []).forEach((ref, position) => {
-      citationIndex.set(ref.id, position + 1);
-    });
-  }
+  // A journal article cites too, and its back matter is where the list lives.
+  const citationEntries: Reference[] = doc.type === 'thesis' || doc.type === 'journal'
+    ? (doc.backMatter?.references ?? [])
+    : [];
+  citationEntries.forEach((ref, position) => {
+    citationIndex.set(ref.id, position + 1);
+  });
   resetHeadingIndex();
   collectHeadingIndex(doc);
 
   const generatedHeader = headerText
-    || (doc.type === 'official' ? '' : `${template.meta.organization}${doc.type === 'journal' ? '学术论文' : '学位论文'}`);
+    // A journal gets no invented running head: the template either declares one
+    // or the article goes without, which is how most journals are submitted.
+    || (doc.type === 'official' || doc.type === 'journal' ? '' : `${template.meta.organization}学位论文`);
 
   const templateSections = template.pageSections ?? [];
   const sections: ISectionOptions[] = [];
@@ -3473,6 +3528,24 @@ class RawElement extends XmlComponent {
  * number as a plain string (which is what this renderer did) produces text that
  * looks right and cannot be referenced, renumbered, or listed.
  */
+/**
+ * How a caption's label reads.
+ *
+ * A thesis numbers per chapter and labels in Chinese (表 1-1, 图 2-3); a journal
+ * numbers straight through and labels in the article's language (Table 1,
+ * Figure 2). The mode is set once per render.
+ */
+let captionMode: 'thesis' | 'journal' = 'thesis';
+let captionLanguage: 'zh' | 'en' = 'zh';
+
+/** `表` becomes `Table`, `图` becomes `Figure`, `式` becomes `Equation`. */
+function captionWord(kind: '表' | '图' | '式'): string {
+  if (captionLanguage === 'zh') return kind;
+  if (kind === '表') return 'Table';
+  if (kind === '图') return 'Figure';
+  return 'Equation';
+}
+
 function captionSeqLabel(kind: '表' | '图' | '式'): string {
   if (kind === '表') return 'Table';
   if (kind === '图') return 'Figure';
@@ -3525,7 +3598,10 @@ function captionNumberRuns(
 ): XmlComponent[] {
   const runs: XmlComponent[] = [captionBookmarkStart(captionBookmark(entry.label), bookmarkId)];
 
-  if (entry.manual) {
+  // A journal numbers straight through and its label is already a word, so the
+  // label is printed as text. Word's chapter-scoped SEQ field only fits a thesis,
+  // whose captions restart with every chapter.
+  if (entry.manual || captionMode === 'journal') {
     // The author's own label, kept as text: a SEQ field here would renumber it.
     runs.push(styledRun(entry.label, style, true));
     runs.push(captionBookmarkEnd(bookmarkId));
@@ -3730,10 +3806,16 @@ function numberCaptions(blocks: NumberedBlock[], chapter: number, counters: Map<
     // A number the author wrote wins and keeps its literal text: it is outside
     // the sequence Word manages, so giving it a SEQ field would renumber it out
     // from under them. Everything else is Word's to number.
+    //
+    // A thesis numbers per chapter and labels in Chinese (表 1-1); a journal
+    // numbers straight through and labels in the article's language (Table 1).
     const written = block.number;
+    const sequential = captionMode === 'journal'
+      ? `${captionWord(kind)} ${seq}`
+      : (chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`);
     const entry: CaptionEntry = written
       ? { kind, chapter, seq, label: written, display: written, manual: true, title: block.caption ?? '' }
-      : { kind, chapter, seq, label: chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`, display: chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`, manual: false, title: block.caption ?? '' };
+      : { kind, chapter, seq, label: sequential, display: sequential, manual: false, title: block.caption ?? '' };
     block.number = entry.label;
 
     captionIndex.entries.set(entry.label, entry);
@@ -3765,10 +3847,14 @@ function numberCaptionsInDocument(doc: OpenThesisDocument): void {
     return;
   }
   if (doc.type === 'journal') {
-    let chapter = 0;
+    // A journal numbers straight through. There are no chapters to restart at,
+    // so every block list is numbered with chapter 0: 表 becomes Table 1 and an
+    // equation becomes (1), not (2-1).
     for (const section of doc.sections ?? []) {
-      chapter += 1;
-      numberCaptions(section.content as NumberedBlock[], chapter, counters);
+      numberCaptions(section.content as NumberedBlock[], 0, counters);
+      for (const sub of section.subsections ?? []) {
+        numberCaptions(sub.content as NumberedBlock[], 0, counters);
+      }
     }
     return;
   }
