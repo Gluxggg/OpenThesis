@@ -552,22 +552,20 @@ function rejectUnknownFlags(command: string, args: string[]): void {
  * Windows and macOS filesystems are case-insensitive, so the previous plain
  * string comparison let `import a.md -o a.MD` overwrite the Markdown source
  * with the JSON it had just produced.
+ *
+ * Case folding is applied on *every* platform on purpose, not just the
+ * case-insensitive ones: the same command line may later be run where `a.md` and
+ * `a.MD` are one file, so refusing the pair everywhere is the rule that cannot
+ * destroy a source file. `tests/cli.test.mjs` pins that behaviour.
  */
 function isSamePath(a: string, b: string): boolean {
-  // Lowercasing is only correct on a case-insensitive filesystem. Doing it
-  // unconditionally made `a.MD` and `a.md` the same file everywhere, so on
-  // Linux/macOS — where they are two distinct files — the overwrite guard
-  // refused a legitimate output, and the "don't clobber the input" check could
-  // be satisfied by a file it was about to destroy.
-  const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
   const normalize = (p: string) => {
     const resolved = resolve(p);
     try {
-      const real = realpathSync.native(resolved);
-      return caseInsensitive ? real.toLowerCase() : real;
+      return realpathSync.native(resolved).toLowerCase();
     } catch {
       // Output paths usually do not exist yet.
-      return caseInsensitive ? resolved.toLowerCase() : resolved;
+      return resolved.toLowerCase();
     }
   };
   return normalize(a) === normalize(b);
