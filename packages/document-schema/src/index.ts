@@ -20,6 +20,25 @@ export type DocumentType = 'thesis' | 'journal' | 'official';
 // ── TEMPLATE (parsed from .docx or inferred from .pdf) ─────
 // ============================================================
 
+export interface TemplateNumberingLevel {
+  ilvl: number;
+  /** `w:numFmt`, e.g. `decimal`, `upperRoman`, `chineseCounting`. */
+  format?: string;
+  /** `w:lvlText`, e.g. `%1`, `%1.%2`, `附录 %1`. */
+  text?: string;
+  start?: number;
+  /** `w:pStyle`: the style this level is bound to, when the template says so. */
+  pStyle?: string;
+  /** `w:suff`: what follows the number — `tab`, `space` or `nothing`. */
+  suff?: string;
+}
+
+export interface TemplateNumbering {
+  numId: number;
+  abstractId: number;
+  levels: TemplateNumberingLevel[];
+}
+
 export interface DocumentTemplate {
   meta: TemplateMeta;
   page: PageSettings;
@@ -59,6 +78,15 @@ export interface DocumentTemplate {
    * these rather than letting a template silently produce wrong output.
    */
   warnings?: string[];
+  /**
+   * `word/numbering.xml`, as far as headings are concerned.
+   *
+   * Each `w:num` instance points at an `w:abstractNum`; the levels carry the
+   * `w:lvlText` shape (`%1`, `%1.%2`) that decides what a chapter number looks
+   * like. `w:lvlOverride` entries are not read — a template that overrides a
+   * level inline keeps the abstract definition.
+   */
+  numbering?: TemplateNumbering[];
 }
 
 export interface TemplateMeta {
@@ -135,6 +163,12 @@ export interface PageSettings {
   headers?: RunningHeadSlots;
   /** The footers (`w:footerReference`) this section ends up with, same rules. */
   footers?: RunningHeadSlots;
+  /**
+   * `w:pgSz/@w:orient`. Word keeps the page size in portrait order and uses this
+   * attribute to say which way the content reads, so a landscape page has a
+   * taller `w:h` than `w:w` only when the writer swaps them for us.
+   */
+  orientation?: 'portrait' | 'landscape';
 }
 
 /** Page-number formats the generator understands (`w:pgNumType/@w:fmt`). */
@@ -233,6 +267,15 @@ export interface ParagraphFormatting {
   keepNext?: boolean;
   /** `w:keepLines` — do not split this paragraph across a page boundary. */
   keepLines?: boolean;
+  /**
+   * `w:numPr` — the numbering this style is bound to, if any.
+   *
+   * The template declares it on the style, so a chapter heading numbered `1`,
+   * `1.1`, `2.3.3` gets that number from `numbering.xml` rather than from the
+   * content file. `numId: 0` is OOXML for "remove numbering" and is kept as-is
+   * so the renderer can tell the two cases apart.
+   */
+  numbering?: { numId: number; ilvl: number };
 }
 
 // ════════════════════════════════════════════════════════════
@@ -246,7 +289,7 @@ export type BlockType =
   | 'equation' | 'equation_numbered'
   | 'figure' | 'table'
   | 'list_item' | 'code_block' | 'blockquote'
-  | 'horizontal_rule' | 'spacer' | 'page_break'
+  | 'horizontal_rule' | 'spacer' | 'page_break' | 'section_break'
   // Official document blocks
   | 'red_header' | 'document_number' | 'recipient_line'
   | 'signature_block' | 'attachment_note';
@@ -335,8 +378,45 @@ export interface BlockquoteBlock extends BaseBlock {
   type: 'blockquote'; text: string;
 }
 
-export interface SpacerBlock extends BaseBlock { type: 'spacer'; lines: number; }
+export interface SpacerBlock extends BaseBlock {
+  type: 'spacer';
+  /** Blank lines at the built-in 312-twip line height. */
+  lines?: number;
+  /**
+   * Exact height in twips.
+   *
+   * A cover's gaps are measurements, not line counts: the university guide
+   * fixes 5 cm between the cover's tiers, and "five blank lines" is only as
+   * tall as the line height happens to be. This renders as one empty paragraph
+   * with an `exact` line spacing of that height.
+   */
+  twips?: number;
+  /** The same, in centimetres — the unit the writing guides use. */
+  cm?: number;
+}
 export interface PageBreakBlock extends BaseBlock { type: 'page_break'; }
+
+/**
+ * Start a new section here, with page setup of its own.
+ *
+ * A thesis is laid out as up to three sections — cover, front matter, body —
+ * because those are the places the guide changes the geometry. A chapter that
+ * turns one passage landscape, or sets it in two columns, is a fourth change
+ * inside the body, and it used to be flattened into whatever part it fell in.
+ * This block is that boundary: everything after it lands in a new section.
+ */
+export interface SectionBreakBlock extends BaseBlock {
+  type: 'section_break';
+  /** Page setup for the section that begins after this break. */
+  page?: {
+    /** `landscape` swaps the page width and height. */
+    orientation?: 'portrait' | 'landscape';
+    /** Column count for this section. */
+    columns?: number;
+    /** Space between columns, in twips. */
+    columnGutter?: number;
+  };
+}
 export interface HorizontalRuleBlock extends BaseBlock { type: 'horizontal_rule'; }
 
 // Official document blocks
@@ -360,7 +440,7 @@ export type ContentBlock =
   | HeadingBlock | ParagraphBlock | CenteredTextBlock
   | EquationBlock | FigureBlock | TableBlock
   | ListItemBlock | CodeBlockBlock | BlockquoteBlock
-  | SpacerBlock | PageBreakBlock | HorizontalRuleBlock
+  | SpacerBlock | PageBreakBlock | SectionBreakBlock | HorizontalRuleBlock
   | RedHeaderBlock | DocumentNumberBlock | RecipientLineBlock
   | SignatureBlockBlock | AttachmentNoteBlock;
 

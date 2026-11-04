@@ -10,7 +10,7 @@ import {
   Header, Footer, PageNumber, PageBreak,
   AlignmentType,
   BorderStyle, WidthType, ShadingType, LevelFormat,
-  convertMillimetersToTwip, Packer,
+  convertMillimetersToTwip, Packer, LineRuleType, PageOrientation,
   ImageRun,
   Math as DocxMath, MathRun, MathFraction, MathRadical, MathSuperScript,
   MathSubScript, MathSubSuperScript,
@@ -36,6 +36,7 @@ import type {
   LineSpacingRule,
   StyleRole,
   LegacyDocumentJSON,
+  SpacerBlock,
   OpenThesisDocument,
   HeadingBlock,
   ParagraphBlock,
@@ -382,8 +383,20 @@ function renderHeading(
 ): Paragraph {
   // `styleRole` lets a front/back-matter heading use its own format.
   const style = resolveStyle(template, block.styleRole ?? block.type, docType);
+  // The template binds a heading style to a numbering instance through
+  // `w:numPr`. A number written in the content file wins — the author asked for
+  // that exact label — and the template's own numbering fills in otherwise.
+  const binding = style.paragraph.numbering;
+  const autoNumbering = binding && binding.numId !== 0
+    ? { reference: templateNumberingReference(binding.numId), level: binding.ilvl }
+    : undefined;
+
   const numberPrefix = block.number ? `${block.number}  ` : '';
   return new Paragraph({
+    // A number written in the content file wins: the author asked for that
+    // exact label. Otherwise the template's own numbering takes over, which is
+    // how a guide that numbers chapters `1`, `1.1`, `2.3.3` gets honoured.
+    numbering: block.number ? undefined : autoNumbering,
     children: styledRuns(numberPrefix + block.text, style, style.font.bold),
     alignment: mapAlignment(style.paragraph.alignment),
     // Headings carry the guide's hanging indent (0.75 / 1 / 1.25 cm); this
@@ -1147,12 +1160,21 @@ function renderFigure(
   })];
 }
 
-function renderSpacer(lines: number): Paragraph[] {
-  return Array.from({ length: lines }, () =>
-    new Paragraph({
-      spacing: { line: 312 },
+function renderSpacer(block: SpacerBlock): Paragraph[] {
+  // An exact height is one empty paragraph whose line box *is* that height.
+  // A cover's 5 cm gap is a measurement; five blank lines is only as tall as
+  // whatever line height is in force, which is how the guide's spacing got
+  // lost in the first place.
+  const exact = block.twips ?? (block.cm === undefined ? undefined : convertMillimetersToTwip(block.cm * 10));
+  if (exact !== undefined) {
+    return [new Paragraph({
       children: [],
-    }),
+      spacing: { line: exact, lineRule: LineRuleType.EXACT },
+    })];
+  }
+  const count = Math.max(0, Math.floor(block.lines ?? 0));
+  return Array.from({ length: count }, () =>
+    new Paragraph({ spacing: { line: 312 }, children: [] }),
   );
 }
 
@@ -1459,7 +1481,12 @@ function processBlock(
       return renderFigure(template, block, contentDir, docType);
 
     case 'spacer':
-      return renderSpacer(block.lines);
+      return renderSpacer(block);
+
+    case 'section_break':
+      // Nothing to draw: `renderThesisParts` already cut the block list here and
+      // started a new section. Reaching this means a block slipped past that split.
+      return [];
 
     case 'page_break':
       return [renderPageBreak()];
@@ -1512,6 +1539,8 @@ export type DocumentPartRole = 'cover' | 'front_matter' | 'body';
 interface RenderedPart {
   role: DocumentPartRole;
   children: (Paragraph | Table)[];
+  /** Page setup for this part, when a `section_break` asked for one. */
+  page?: { orientation?: 'portrait' | 'landscape'; columns?: number; columnGutter?: number };
 }
 
 /**
@@ -1579,10 +1608,33 @@ function renderThesisParts(
     parts.push({ role: 'front_matter', children });
   }
 
-  const bodyChildren: (Paragraph | Table)[] = [];
-  if (body.length > 0) {
-    bodyChildren.push(...processBlocks(flattenSections(body), template, contentDir, undefined, state));
+  // A chapter that turns one passage landscape, or sets it in two columns, is a
+  // section boundary inside the body. Each chunk is laid out as its own section
+  // with the override its `section_break` declared; the back matter below belongs
+  // to the last one, because the guide numbers it with the body.
+  // A break outside the body has nothing to cut: the cover, the front matter and
+  // the back matter are laid out as their own sections already. Say so rather
+  // than dropping it in silence.
+  const partsOutsideBody = [
+    ...(doc.cover ?? []),
+    ...doc.sections.filter(section => !body.includes(section)).flatMap(section => section.content),
+    ...(doc.backMatter?.appendices ?? []).flatMap(section => section.content),
+  ];
+  if (partsOutsideBody.some(block => block.type === 'section_break')) {
+    console.warn(
+      'A section_break outside the thesis body is ignored: the cover, the front ' +
+      'matter and the back matter are already separate sections.',
+    );
   }
+
+  const bodyChunks = splitAtSectionBreaks(body.length > 0 ? flattenSections(body) : []);
+  const bodyParts: RenderedPart[] = bodyChunks.map(chunk => ({
+    role: 'body' as const,
+    ...(chunk.page ? { page: chunk.page } : {}),
+    children: processBlocks(chunk.blocks, template, contentDir, undefined, state),
+  }));
+  if (bodyParts.length === 0) bodyParts.push({ role: 'body', children: [] });
+  const bodyChildren = bodyParts[bodyParts.length - 1].children;
 
   // Back Matter. 参考文献 and everything after it belong to the body section:
   // the guide numbers them with the body, not with the front matter.
@@ -1616,11 +1668,40 @@ function renderThesisParts(
     );
   }
 
-  if (bodyChildren.length > 0 || parts.length === 0) {
-    parts.push({ role: 'body', children: bodyChildren });
+  const nonEmptyBodyParts = bodyParts.filter(part => part.children.length > 0);
+  if (nonEmptyBodyParts.length > 0) {
+    parts.push(...nonEmptyBodyParts);
+  } else if (parts.length === 0) {
+    parts.push({ role: 'body', children: [] });
   }
 
   return parts;
+}
+
+/**
+ * Cut a block list at its `section_break` markers.
+ *
+ * Each chunk becomes a section of its own, laid out with the override the
+ * break declared. A list with no breaks comes back as one unnamed chunk, so
+ * the common case is unchanged.
+ */
+function splitAtSectionBreaks(
+  blocks: ContentBlock[],
+): { blocks: ContentBlock[]; page?: RenderedPart['page'] }[] {
+  const chunks: { blocks: ContentBlock[]; page?: RenderedPart['page'] }[] = [];
+  let current: ContentBlock[] = [];
+  let page: RenderedPart['page'];
+  for (const block of blocks) {
+    if (block.type === 'section_break') {
+      chunks.push({ blocks: current, ...(page ? { page } : {}) });
+      current = [];
+      page = (block as { page?: RenderedPart['page'] }).page;
+      continue;
+    }
+    current.push(block);
+  }
+  chunks.push({ blocks: current, ...(page ? { page } : {}) });
+  return chunks;
 }
 
 /**
@@ -2051,6 +2132,12 @@ function pageProperties(
   return {
     page: {
       size: {
+        // `w:orient` tells Word which way the content reads; a section that
+        // swapped its width and height for landscape must say so, or Word keeps
+        // printing it as a portrait page with the wrong dimensions.
+        orientation: (settings.orientation ?? (settings.width > settings.height ? 'landscape' : 'portrait')) === 'landscape'
+          ? PageOrientation.LANDSCAPE
+          : PageOrientation.PORTRAIT,
         width: settings.width,
         height: settings.height,
       },
@@ -2218,6 +2305,26 @@ function partRunningHeads<T extends Header | Footer>(
 }
 
 /** One `w:sectPr` assembled from a part, plus whether it asks for an even head. */
+/**
+ * Apply a `section_break` override on top of the geometry a part inherits.
+ *
+ * Landscape swaps the page's width and height, because that is what the
+ * attribute means: `w:orient` only tells Word which way the content reads.
+ */
+function applyPageOverride(
+  settings: PageSettings,
+  override?: RenderedPart['page'],
+): PageSettings {
+  if (!override) return settings;
+  const next: PageSettings = { ...settings, margins: { ...settings.margins } };
+  // Do not swap width and height here: the writer library does that itself when
+  // it is told the page is landscape, and swapping twice cancels out.
+  if (override.orientation) next.orientation = override.orientation;
+  if (override.columns !== undefined) next.columns = override.columns;
+  if (override.columnGutter !== undefined) next.columnGutter = override.columnGutter;
+  return next;
+}
+
 function buildPartSection(
   part: RenderedPart,
   template: DocumentTemplate,
@@ -2230,7 +2337,7 @@ function buildPartSection(
     showPageNumbers: boolean;
   },
 ): { section: ISectionOptions; evenReference: boolean } {
-  const settings = partSettings(part.role, sections, template);
+  const settings = applyPageOverride(partSettings(part.role, sections, template), part.page);
   const shared = {
     textOverride: options.headerText,
     variables: options.variables,
@@ -2325,7 +2432,10 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
     // A template that declares several sections is what the cover / front matter
     // / body split is laid out against. One that declares none — an older parsed
     // JSON, or a hand-written template — keeps the single section it always had.
-    if (templateSections.length > 1) {
+    // A part that carries its own page setup forces per-part sections even when
+    // the template declares only one: that is what a mid-chapter `section_break`
+    // is asking for.
+    if (templateSections.length > 1 || parts.some(part => part.page)) {
       for (const part of parts) {
         const built = buildPartSection(part, template, templateSections, {
           headerText,
@@ -2363,7 +2473,7 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   }
 
   const wordDoc = new Document({
-    numbering: { config: LIST_NUMBERING },
+    numbering: { config: [...LIST_NUMBERING, ...templateNumberingConfig(template)] },
     // The 目录 is a field; Word builds its entries with the TOC1/TOC2/TOC3
     // styles, so those must exist in the package or the template's own directory
     // typography is silently ignored.
@@ -2613,6 +2723,54 @@ function tocEntryStyles(template: DocumentTemplate): IParagraphStyleOptions[] {
     });
   }
   return styles;
+}
+
+/**
+ * The template's own heading numbering, as the writer library wants it.
+ *
+ * The template binds its heading styles to `w:num` instances through
+ * `w:numPr`, and each instance points at an `w:abstractNum` whose `w:lvlText`
+ * says what the number looks like (`%1`, `%1.%2`, `附录 %1`). None of that was
+ * read before, so a heading's number could only come from the content file.
+ */
+const LEVEL_FORMATS: Record<string, (typeof LevelFormat)[keyof typeof LevelFormat]> = {
+  decimal: LevelFormat.DECIMAL,
+  upperRoman: LevelFormat.UPPER_ROMAN,
+  lowerRoman: LevelFormat.LOWER_ROMAN,
+  upperLetter: LevelFormat.UPPER_LETTER,
+  lowerLetter: LevelFormat.LOWER_LETTER,
+  chineseCounting: LevelFormat.CHINESE_COUNTING,
+  chineseCountingThousand: LevelFormat.CHINESE_COUNTING_THOUSAND,
+  decimalEnclosedCircle: LevelFormat.DECIMAL_ENCLOSED_CIRCLE,
+  none: LevelFormat.NONE,
+};
+
+function mapLevelFormat(format?: string): (typeof LevelFormat)[keyof typeof LevelFormat] {
+  return (format && LEVEL_FORMATS[format]) || LevelFormat.DECIMAL;
+}
+
+/** The numbering reference a template `numId` is emitted under. */
+function templateNumberingReference(numId: number): string {
+  return `template-num-${numId}`;
+}
+
+function templateNumberingConfig(template: DocumentTemplate): INumberingOptions['config'][number][] {
+  const config: INumberingOptions['config'][number][] = [];
+  for (const definition of template.numbering ?? []) {
+    // `w:numId="0"` is OOXML for "no numbering", not an instance.
+    if (definition.numId === 0 || definition.levels.length === 0) continue;
+    config.push({
+      reference: templateNumberingReference(definition.numId),
+      levels: definition.levels.map(level => ({
+        level: level.ilvl,
+        format: mapLevelFormat(level.format),
+        text: level.text ?? `%${level.ilvl + 1}.`,
+        start: level.start ?? 1,
+        alignment: AlignmentType.LEFT,
+      })),
+    });
+  }
+  return config;
 }
 
 // ── Utility ───────────────────────────────────────────────

@@ -59,7 +59,7 @@ const REQUIRED_STRING_FIELDS: Record<string, readonly string[]> = {
 };
 
 /** Block types handled by dedicated logic below. */
-const SPECIAL_BLOCK_TYPES = ['table', 'spacer', 'page_break', 'horizontal_rule', 'attachment_note'] as const;
+const SPECIAL_BLOCK_TYPES = ['table', 'spacer', 'page_break', 'section_break', 'horizontal_rule', 'attachment_note'] as const;
 
 const BLOCK_TYPES = [
   ...Object.keys(REQUIRED_STRING_FIELDS),
@@ -375,11 +375,44 @@ function validateBlock(value: unknown, path: string, report: Report): void {
     case 'table':
       validateTable(value, path, report);
       break;
-    case 'spacer':
-      if (!Number.isInteger(value.lines) || (value.lines as number) < 0) {
-        report(`${path}.lines`, `must be a non-negative integer, received ${describe(value.lines)}`);
+    case 'spacer': {
+      // A spacer is a height: either a line count or an exact measurement.
+      const units = [value.lines, value.twips, value.cm].filter(v => v !== undefined);
+      if (units.length === 0) {
+        report(path, 'must declare one of lines, twips or cm');
+        break;
+      }
+      if (units.length > 1) {
+        report(path, 'must declare only one of lines, twips or cm');
+        break;
+      }
+      const given = units[0];
+      if (typeof given !== 'number' || !Number.isFinite(given) || given < 0) {
+        report(path, `must be a non-negative number, received ${describe(given)}`);
+      } else if (value.lines !== undefined && !Number.isInteger(value.lines)) {
+        report(`${path}.lines`, `must be an integer number of lines, received ${describe(value.lines)}`);
       }
       break;
+    }
+    case 'section_break': {
+      const page = value.page;
+      if (page !== undefined) {
+        if (!isObject(page)) {
+          report(`${path}.page`, `must be an object, received ${describe(page)}`);
+          break;
+        }
+        if (page.orientation !== undefined && page.orientation !== 'portrait' && page.orientation !== 'landscape') {
+          report(`${path}.page.orientation`, `must be "portrait" or "landscape", received ${describe(page.orientation)}`);
+        }
+        if (page.columns !== undefined && (!Number.isInteger(page.columns) || (page.columns as number) < 1)) {
+          report(`${path}.page.columns`, `must be a positive integer, received ${describe(page.columns)}`);
+        }
+        if (page.columnGutter !== undefined && (typeof page.columnGutter !== 'number' || !Number.isFinite(page.columnGutter) || page.columnGutter < 0)) {
+          report(`${path}.page.columnGutter`, `must be a non-negative number, received ${describe(page.columnGutter)}`);
+        }
+      }
+      break;
+    }
     case 'recipient_line':
       if (value.recipientType !== 'primary' && value.recipientType !== 'cc') {
         report(`${path}.recipientType`, `must be "primary" or "cc", received ${describe(value.recipientType)}`);
