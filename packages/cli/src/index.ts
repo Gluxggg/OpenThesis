@@ -554,13 +554,20 @@ function rejectUnknownFlags(command: string, args: string[]): void {
  * with the JSON it had just produced.
  */
 function isSamePath(a: string, b: string): boolean {
+  // Lowercasing is only correct on a case-insensitive filesystem. Doing it
+  // unconditionally made `a.MD` and `a.md` the same file everywhere, so on
+  // Linux/macOS — where they are two distinct files — the overwrite guard
+  // refused a legitimate output, and the "don't clobber the input" check could
+  // be satisfied by a file it was about to destroy.
+  const caseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
   const normalize = (p: string) => {
     const resolved = resolve(p);
     try {
-      return realpathSync.native(resolved).toLowerCase();
+      const real = realpathSync.native(resolved);
+      return caseInsensitive ? real.toLowerCase() : real;
     } catch {
       // Output paths usually do not exist yet.
-      return resolved.toLowerCase();
+      return caseInsensitive ? resolved.toLowerCase() : resolved;
     }
   };
   return normalize(a) === normalize(b);

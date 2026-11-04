@@ -1076,3 +1076,83 @@ test('a journal body takes its typography from the template, not from the thesis
   const lastSize = [...xml.slice(0, at).matchAll(/<w:sz w:val="(\d+)"\/>/g)].pop();
   assert.equal(Number(lastSize?.[1]), 37);
 });
+
+test('a heading that declares w:keepNext carries it into the document', async () => {
+  // `keepNext` / `keepLines` were parsed by the template parser and merged into
+  // every resolved style, but `ParagraphFormatting` had no field for them, so
+  // they were dropped before the renderer could act — and a heading left alone
+  // at the foot of a page is exactly what `keepNext` prevents.
+  const tpl = structuredClone(template);
+  const headingId = tpl.roleWinners.heading1;
+  tpl.styles[headingId].paragraph.keepNext = true;
+  tpl.styles[headingId].paragraph.keepLines = true;
+
+  const buffer = await renderDocument({
+    template: tpl,
+    document: {
+      type: 'thesis', meta: { title: 'Keep' }, cover: [],
+      sections: [{
+        id: 'c1', type: 'chapter', title: 'Kept heading',
+        content: [{ type: 'paragraph', text: 'Body.' }],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /<w:keepNext\/>/);
+  assert.match(xml, /<w:keepLines\/>/);
+});
+
+test('a table cell keeps the template line-spacing rule', async () => {
+  // Table cells passed `line` without `lineRule`, so an `exact` twips value was
+  // read as a multiple of the line height — the only place the template's own
+  // spacing was discarded instead of honoured.
+  const tpl = structuredClone(template);
+  const tableId = tpl.roleWinners.table ?? Object.keys(tpl.styles)[0];
+  tpl.styleRoles[tableId] = 'table';
+  tpl.roleWinners.table = tableId;
+  tpl.styles[tableId].lineSpacing = 300;
+  tpl.styles[tableId].lineSpacingRule = 'exact';
+
+  const buffer = await renderDocument({
+    template: tpl,
+    document: {
+      type: 'thesis', meta: { title: 'Cells' }, cover: [],
+      sections: [{
+        id: 'c1', type: 'chapter', title: 'Chapter',
+        content: [{ type: 'table', caption: 'T', headers: ['A'], data: [['1']] }],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /w:line="300" w:lineRule="exact"/);
+});
+
+test('a caller-supplied figure width is clamped to the printable page', async () => {
+  // Only the no-size branch clamped; a `width` from the content JSON reached the
+  // document unclamped and ran off the right margin.
+  const contentDir = mkdtempSync(join(tmpdir(), 'openthesis-figure-'));
+  writeFileSync(
+    join(contentDir, 'wide.png'),
+    Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9Qz0AEYBxVSF+FAP5FDvcfRYWgAAAAAElFTkSuQmCC', 'base64'),
+  );
+
+  const buffer = await renderDocument({
+    template,
+    contentDir,
+    document: {
+      type: 'thesis', meta: { title: 'Figure' }, cover: [],
+      sections: [{
+        id: 'c1', type: 'chapter', title: 'Chapter',
+        content: [{ type: 'figure', path: 'wide.png', caption: 'Wide', width: 4000 }],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  // A4 minus the template's 3 cm margins is 851 twips short of the page width;
+  // 1 px = 9525 EMU, so the printable width in px is about 600.
+  const extent = xml.match(/<wp:extent cx="(\d+)" cy="(\d+)"\/>/);
+  assert.ok(extent, 'expected a drawing extent');
+  const widthPx = Number(extent[1]) / 9525;
+  assert.ok(widthPx <= 620, `expected the width to be clamped, got ${widthPx.toFixed(0)} px`);
+  assert.ok(Number(extent[2]) > 0, 'expected a positive height');
+});

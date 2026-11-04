@@ -377,10 +377,16 @@ function extractParagraphProps(pPr: any, runSize?: number): RawParagraphProps | 
   const outlineLvl = pPr['w:outlineLvl']?.['@_w:val'];
   if (outlineLvl !== undefined) props.outlineLvl = parseInt(outlineLvl);
 
-  // Keep with next / keep lines
-  if (pPr['w:keepNext']) props.keepNext = true;
-  if (pPr['w:keepLines']) props.keepLines = true;
-  if (pPr['w:pageBreakBefore']) props.pageBreakBefore = true;
+  // Keep with next / keep lines / page break.
+  //
+  // All three are OOXML booleans, which Word writes as *empty* elements
+  // (`<w:keepNext/>`). fast-xml-parser turns those into the empty string, which
+  // is falsy — so `if (pPr['w:keepNext'])` never fired for a real Word file.
+  // The shipped asset only carries `pageBreakBefore` because it was written into
+  // the JSON by hand from the university guide, not because parsing produced it.
+  if (flagOn(pPr['w:keepNext'])) props.keepNext = true;
+  if (flagOn(pPr['w:keepLines'])) props.keepLines = true;
+  if (flagOn(pPr['w:pageBreakBefore'])) props.pageBreakBefore = true;
   return Object.keys(props).length > 0 ? props : undefined;
 }
 
@@ -592,6 +598,10 @@ function rawToParagraphStyle(raw: RawStyle): ParagraphStyle {
       // A chapter starts on a new page; the flag was parsed and then dropped
       // here, so every chapter ran on from the previous one.
       pageBreakBefore: raw.pPr?.pageBreakBefore,
+      // `w:keepNext` / `w:keepLines` were parsed and merged into every resolved
+      // style, then dropped here because the schema had no field for them.
+      keepNext: raw.pPr?.keepNext,
+      keepLines: raw.pPr?.keepLines,
       firstLineIndent: raw.pPr?.indent?.firstLine,
       hangingIndent: raw.pPr?.indent?.hanging,
       leftIndent: raw.pPr?.indent?.left,
@@ -652,29 +662,36 @@ type RunningHeadPartIndex = Map<string, RunningHeadPart>;
  * `w:evenAndOddHeaders`, which is read alongside this.
  */
 async function readRunningHeadParts(zip: JSZip, parser: XMLParser): Promise<RunningHeadPartIndex> {
-  const index: RunningHeadPartIndex = new Map();
-
   const relsFile = zip.file('word/_rels/document.xml.rels');
-  if (!relsFile) return index;
+  if (!relsFile) return new Map();
   const rels = parser.parse(await relsFile.async('string'));
 
-  for (const relationship of asArray(rels?.['Relationships']?.['Relationship']) as any[]) {
-    const type = String(relationship?.['@_Type'] ?? '');
-    const isHeader = type.endsWith('/header');
-    if (!isHeader && !type.endsWith('/footer')) continue;
+  // Read every part concurrently. The reads used to be awaited one at a time
+  // inside a serial loop; a template with 11 sections declares roughly 10–20
+  // header/footer parts, and those round trips were most of `thesis parse`'s
+  // wall time.
+  const targets = (asArray(rels?.['Relationships']?.['Relationship']) as any[])
+    .map(relationship => {
+      const type = String(relationship?.['@_Type'] ?? '');
+      const isHeadOrFoot = type.endsWith('/header') || type.endsWith('/footer');
+      const id = relationship?.['@_Id'];
+      const target = relationship?.['@_Target'];
+      if (!isHeadOrFoot || id === undefined || typeof target !== 'string') return undefined;
+      return { id: String(id), part: resolvePartPath(target) };
+    })
+    .filter((entry): entry is { id: string; part: string } => entry !== undefined);
 
-    const id = relationship?.['@_Id'];
-    const target = relationship?.['@_Target'];
-    if (id === undefined || typeof target !== 'string') continue;
+  const parts = await Promise.all(
+    targets.map(async ({ id, part }) => {
+      const xml = await zip.file(part)?.async('string');
+      // A relationship whose part is missing still occupies the slot: the
+      // template asked for something here, and an empty head is the reading
+      // that cannot invent text.
+      return [id, xml ? readRunningHeadPart(parser, xml) : { text: '', pageNumber: false, rule: false }] as const;
+    }),
+  );
 
-    const xml = await zip.file(resolvePartPath(target))?.async('string');
-    // A relationship whose part is missing still occupies the slot: the template
-    // asked for something here, and an empty head is the reading that cannot
-    // invent text.
-    index.set(String(id), xml ? readRunningHeadPart(parser, xml) : { text: '', pageNumber: false, rule: false });
-  }
-
-  return index;
+  return new Map(parts);
 }
 
 /** A relationship target is relative to `word/`; a leading `/` makes it absolute. */
@@ -804,6 +821,20 @@ function isOn(element: any): boolean {
   if (value === undefined) return true;
   const text = String(value).toLowerCase();
   return text !== '0' && text !== 'false' && text !== 'off';
+}
+
+/**
+ * The same test, for a value that may be *absent*.
+ *
+ * `isOn` answers "is this present element on?"; the callers above have to ask
+ * "is this element there at all, and if so is it on?" — and `isOn(undefined)`
+ * returns `true`, so it cannot be used unguarded. An empty element parses to
+ * `''`, which is present and on but falsy: that is the case `if (element)` gets
+ * wrong.
+ */
+function flagOn(element: unknown): boolean {
+  if (element === undefined || element === null) return false;
+  return isOn(element);
 }
 
 /**

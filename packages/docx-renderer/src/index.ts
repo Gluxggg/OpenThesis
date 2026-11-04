@@ -365,6 +365,11 @@ function renderHeading(
     // The guide wants a page break between chapters, and the chapter style
     // declares one.
     pageBreakBefore: style.paragraph.pageBreakBefore,
+    // A heading that declares `w:keepNext` must not be left alone at the foot of
+    // a page. The parser read the flag but the schema had no field to carry it,
+    // so it never reached the document.
+    keepNext: style.paragraph.keepNext,
+    keepLines: style.paragraph.keepLines,
     spacing: {
       before: style.paragraph.spaceBefore,
       after: style.paragraph.spaceAfter,
@@ -855,7 +860,15 @@ function renderTable(
           new Paragraph({
             children: styledRuns(h, headerStyle, true),
             alignment: mapAlignment(headerStyle.paragraph.alignment),
-            spacing: { before: 40, after: 40, line: headerStyle.lineSpacing },
+            // `lineStyle` carries the template's `lineRule`. Passing `line`
+            // alone dropped it, so an `exact` twips value was read as a multiple
+            // of the line height — the one place the template's spacing was
+            // discarded rather than honoured.
+            spacing: {
+              before: headerStyle.paragraph.spaceBefore ?? 40,
+              after: headerStyle.paragraph.spaceAfter ?? 40,
+              ...lineStyle(headerStyle),
+            },
           }),
         ],
       }),
@@ -886,7 +899,14 @@ function renderTable(
             new Paragraph({
               children: styledRuns(row[ci] ?? '', bodyStyle),
               alignment: mapAlignment(bodyStyle.paragraph.alignment),
-              spacing: { before: 20, after: 20, line: bodyStyle.lineSpacing },
+              // Same as the header row: keep the template's rule and its
+              // 段前/段后, and only fall back to the old tight values when the
+              // template does not declare them.
+              spacing: {
+                before: bodyStyle.paragraph.spaceBefore ?? 20,
+                after: bodyStyle.paragraph.spaceAfter ?? 20,
+                ...lineStyle(bodyStyle),
+              },
             }),
           ],
         }),
@@ -1006,24 +1026,33 @@ function renderFigure(
       
       let width = block.width;
       let height = block.height;
-      
-      if (size) {
+
+      if (size && size.width > 0 && size.height > 0) {
+        // A corrupt header can report a zero dimension; dividing by it put
+        // `Infinity` into `w:extent` and produced a package Word refuses to open.
+        const ratio = size.width / size.height;
         if (!width && !height) {
-          // Fit the printable page width while keeping the aspect ratio
-          const targetWidth = Math.min(size.width, maxWidthPx);
-          const ratio = size.width / size.height;
-          width = targetWidth;
-          height = targetWidth / ratio;
+          // Fit the printable page width while keeping the aspect ratio.
+          width = Math.min(size.width, maxWidthPx);
+          height = width / ratio;
         } else if (width && !height) {
-          const ratio = size.width / size.height;
           height = width / ratio;
         } else if (!width && height) {
-          const ratio = size.width / size.height;
           width = height * ratio;
         }
       } else {
         width = width || Math.min(400, maxWidthPx);
         height = height || 300;
+      }
+
+      // A caller-supplied `width` used to reach the document unclamped, so
+      // `width: 1200` on a 600 px printable area ran off the right margin. The
+      // no-size branch already clamped; every branch does now, and the aspect
+      // ratio is preserved when the width is reduced.
+      if (width! > maxWidthPx) {
+        const shrink = maxWidthPx / width!;
+        width = maxWidthPx;
+        height = height! * shrink;
       }
 
       const image = new Paragraph({
@@ -1059,10 +1088,15 @@ function renderFigure(
     }
   }
 
+  // The placeholder used to say 未找到图片 in every failure case, including the
+  // one where the file *was* read and simply could not be embedded (an SVG or
+  // WebP reaches here because `detectImageType` returns null and the extension
+  // wins). Two different problems deserve two different messages.
+  const reason = existsSync(imgPath) ? '无法嵌入图片' : '未找到图片';
   return [new Paragraph({
     children: [
       new TextRun({
-        text: `[图: ${block.caption} (未找到图片: ${block.path})]`,
+        text: `[图: ${block.caption} (${reason}: ${block.path})]`,
         size: captionStyle.font.size,
         font: {
           ascii: captionStyle.font.name,
@@ -2446,14 +2480,22 @@ export async function renderLegacy(
 
 // ── Utility ───────────────────────────────────────────────
 
-function mapAlignment(align?: string): (typeof AlignmentType)[keyof typeof AlignmentType] {
+/**
+ * A schema alignment to a writer-library one, or `undefined` for "not declared".
+ *
+ * Returning `JUSTIFIED` by default made a paragraph whose style declares no
+ * alignment render justified, even when Word's own default for it would be left
+ * — a heading, for instance. `undefined` lets the library omit `w:jc` and Word
+ * apply its default.
+ */
+function mapAlignment(align?: string): (typeof AlignmentType)[keyof typeof AlignmentType] | undefined {
   switch (align) {
     case 'center': return AlignmentType.CENTER;
     case 'left': return AlignmentType.LEFT;
     case 'right': return AlignmentType.RIGHT;
     case 'justified': return AlignmentType.JUSTIFIED;
     case 'distribute': return AlignmentType.DISTRIBUTE;
-    default: return AlignmentType.JUSTIFIED;
+    default: return undefined;
   }
 }
 
@@ -2489,22 +2531,37 @@ function processBlocks(
 /** Path to the parsed USTB template JSON (relative to project root). */
 const USTB_TEMPLATE_JSON = resolve(_dirname, '..', '..', '..', 'assets', 'ustb-thesis-template.json');
 
+/** The parsed built-in template, loaded at most once per process. */
+let USTB_TEMPLATE_CACHE: DocumentTemplate | undefined;
+
 /**
  * Create a USTB thesis template, loading from the pre-parsed .docx template.
  * Falls back to a minimal hardcoded template if the JSON file is unavailable.
  */
 export function createUSTBTemplate(): DocumentTemplate {
+  // Parsed once per process: callers build the same template repeatedly, and it
+  // used to re-read and re-parse a 1,300-line JSON on every call.
+  if (USTB_TEMPLATE_CACHE) return USTB_TEMPLATE_CACHE;
+
   try {
     if (existsSync(USTB_TEMPLATE_JSON)) {
       const raw = JSON.parse(readFileSync(USTB_TEMPLATE_JSON, 'utf-8'));
-      return raw as DocumentTemplate;
+      USTB_TEMPLATE_CACHE = raw as DocumentTemplate;
+      return USTB_TEMPLATE_CACHE;
     }
-  } catch {
-    // Fall through to hardcoded fallback
+  } catch (error: unknown) {
+    // A moved or corrupt asset used to fall through silently, producing a
+    // document styled by the minimal hand-written template with no hint that
+    // anything was wrong. Say so, then fall back.
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `Could not read the built-in USTB template at ${USTB_TEMPLATE_JSON} (${message}); ` +
+      'falling back to the minimal built-in styles.',
+    );
   }
 
   // Minimal hardcoded fallback (used when the parsed JSON is not available)
-  return {
+  USTB_TEMPLATE_CACHE = {
     meta: {
       organization: '北京科技大学',
       name: '博士/硕士学位论文模板',
@@ -2538,4 +2595,6 @@ export function createUSTBTemplate(): DocumentTemplate {
       'FigureCaption': 'figure_caption',
     },
   };
+
+  return USTB_TEMPLATE_CACHE;
 }

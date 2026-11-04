@@ -337,3 +337,22 @@ each has a named regression test.
 | F-10 | Dead plumbing: `mapAlignment(...) ?? AlignmentType.CENTER` could never fire (`mapAlignment` always returns a value); `renderSpacer` took a template it never used; `RenderOptions.outputPath` was declared required while every caller treated it as optional and the implementation guarded it. | — | Fixed — the unreachable fallback removed, the unused parameter dropped, `outputPath` declared optional to match how it is actually used |
 
 `pnpm check`: 137 tests, all passing (120 before this round, 17 added).
+
+---
+
+## 7. Second follow-up round
+
+The rest of the review backlog, plus the PDF feature from the long-stale PR #2.
+
+| # | Finding | Evidence | Status |
+|---|---|---|---|
+| G-1 | `keepNext` / `keepLines` / `pageBreakBefore` never parsed out of a real document. Word writes them as *empty* elements, which fast-xml-parser turns into `""` — falsy — so `if (pPr['w:keepNext'])` never fired. | A template declaring `<w:keepNext/><w:keepLines/>` parsed to a style with neither flag | Fixed — one `flagOn` helper distinguishes "absent" from "present but empty", and the schema grew the `keepNext` / `keepLines` fields it never had, so the renderer can emit them |
+| G-2 | Table cells passed `line` without `lineRule`, so an `exact` value was read as a multiple of the line height; they also hardcoded 段前/段后 40/20 over the template's own. | `spacing: { before: 40, after: 40, line: headerStyle.lineSpacing }` | Fixed — `lineStyle()` and the template's `spaceBefore`/`spaceAfter` with the old values only as fallbacks |
+| G-3 | A caller-supplied figure `width` was never clamped to the printable page (only the no-size branch clamped); a zero-height header made `size.width / size.height` `Infinity`; and the placeholder said 未找到图片 even when the file was found but could not be embedded. | `width: 4000` reached `w:extent` unclamped | Fixed — every branch clamps while preserving the ratio, a zero dimension is rejected, and "无法嵌入图片" is now distinct from "未找到图片" |
+| G-4 | `createUSTBTemplate` swallowed read/parse errors and silently returned the hand-written minimal template; it also re-read and re-parsed a 1,300-line JSON on every call. | — | Fixed — warns with the path and the error, then falls back; the parsed template is cached per process |
+| G-5 | `isSamePath` lowercased unconditionally, so on a case-sensitive filesystem `a.MD` and `a.md` were treated as one file — refusing a legitimate output, and letting the input-clobber guard be satisfied by the file it was about to destroy. | — | Fixed — case folding only on Windows and macOS |
+| G-6 | `mapAlignment` returned `JUSTIFIED` for an undeclared alignment, so a paragraph the template left alone rendered justified instead of taking Word's default. | — | Fixed — returns `undefined`, and the library omits `w:jc` |
+| G-7 | Header/footer parts were read one at a time in a serial loop, and each part was traversed three times. A template with 11 sections declares 10–20 such parts, and those round trips were most of `thesis parse`'s wall time. | — | Fixed — the relationships are read concurrently with `Promise.all` |
+| G-8 | PR #2 (`codex/v3-advanced-omml`) had been open since 2026-08-31 with two commits of real work — text-based PDF template inference — based on pre-audit code, so it could no longer merge. | `git merge-base` = `1ada918e`; 9 conflicted files | Integrated in #8: replayed onto `main`, conflicts resolved by hand so nothing from #4/#7 was reverted, 3 PDF tests carried over. Adds `parsePdfTemplate` (`pdfjs-dist`), `thesis parse <template.docx\\|pdf>`, and a README scope note |
+
+`pnpm check`: 145 tests, all passing.
