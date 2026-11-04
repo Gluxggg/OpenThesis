@@ -54,14 +54,68 @@ function joinParts(parts: (string | undefined)[], separator = '. '): string {
 }
 
 /**
+ * Turn an English name round to GB/T 7714's "姓在前, 名在后" order.
+ *
+ * The standard writes an English author as `SMITH J` — family name, a space, then
+ * the initials of the given names without full stops. The common spellings are
+ * handled: `John Smith`, `John A. Smith`, `J. Smith`, `Smith, John`. A name already
+ * in `SMITH J` form is left alone, and anything that does not look like a name is
+ * returned unchanged rather than mangled.
+ */
+export function invertEnglishName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return trimmed;
+
+  // `Smith, John` — the comma already separates family name from given names.
+  const commaSplit = trimmed.split(',').map(part => part.trim()).filter(Boolean);
+  if (commaSplit.length === 2) {
+    const [family, given] = commaSplit;
+    const inverted = `${family.toUpperCase()} ${initials(given)}`.trim();
+    return inverted;
+  }
+
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) {
+    // A single token is a family name with no given name: upper-case it.
+    return trimmed.toUpperCase();
+  }
+
+  // `SMITH J` — already inverted: a shouting family name then initials.
+  if (parts[0] === parts[0].toUpperCase() && parts.slice(1).every(part => /^[A-Z]\.?$/.test(part))) {
+    return trimmed.replace(/\./g, '');
+  }
+
+  const family = parts[parts.length - 1];
+  const given = parts.slice(0, -1).join(' ');
+  return `${family.toUpperCase()} ${initials(given)}`.trim();
+}
+
+/** `John A.` becomes `J A` — initials, no full stops, space separated. */
+function initials(given: string): string {
+  return given
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(word => word.replace(/\./g, ''))
+    .map(word => (word.length === 1 ? word : word[0]))
+    .map(letter => letter.toUpperCase())
+    .join(' ');
+}
+
+/**
  * 主要责任者, truncated per the standard.
  *
  * Three or fewer are all printed; more are cut to three and closed with 等 for a
- * Chinese entry or et al. for an English one.
+ * Chinese entry or et al. for an English one. An English name is inverted to
+ * `SMITH J` unless the author already wrote it that way.
  */
-export function formatAuthors(authors: string[] | undefined, language?: 'zh' | 'en'): string {
-  const list = (authors ?? []).map(author => author.trim()).filter(Boolean);
-  if (list.length === 0) return '';
+export function formatAuthors(
+  authors: string[] | undefined,
+  language?: 'zh' | 'en',
+  invertNames = true,
+): string {
+  const raw = (authors ?? []).map(author => author.trim()).filter(Boolean);
+  if (raw.length === 0) return '';
+  const list = language === 'en' && invertNames ? raw.map(invertEnglishName) : raw;
   if (list.length <= MAX_AUTHORS) return list.join(', ');
   const suffix = language === 'en' ? ', et al' : ', 等';
   return `${list.slice(0, MAX_AUTHORS).join(', ')}${suffix}`;

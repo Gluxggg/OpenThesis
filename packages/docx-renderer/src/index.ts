@@ -23,7 +23,7 @@ import type {
   MathComponent, INumberingOptions, IParagraphStyleOptions,
 } from 'docx';
 import { formatReference } from './references.js';
-import type { Reference } from '@openthesis/document-schema';
+import type { Reference, ThesisMeta } from '@openthesis/document-schema';
 import type {
   DocumentTemplate,
   ThesisDocument,
@@ -1934,6 +1934,61 @@ function autoCover(doc: ThesisDocument, template: DocumentTemplate): ContentBloc
   return lines;
 }
 
+/**
+ * The 摘要 page a thesis gets when it did not write one as content.
+ *
+ * `meta.abstract` and `meta.keywords` existed on the schema and were only ever
+ * read by the journal renderer, so a thesis that filled them in got nothing.
+ * The guide gives the page its own shape: the body in the abstract role, and a
+ * 关键词 line whose label is bold while the keywords keep the body font - which
+ * is why these are runs rather than one block of text.
+ */
+function renderGeneratedAbstract(
+  meta: ThesisMeta,
+  language: 'zh' | 'en',
+  template: DocumentTemplate,
+): Paragraph[] {
+  const bodyRole = language === 'zh' ? 'thesis_abstract' : 'thesis_abstract_en';
+  const keywordRole = language === 'zh' ? 'thesis_keywords' : 'thesis_keywords_en';
+  const text = language === 'zh' ? meta.abstract : meta.abstractEn;
+  const words = language === 'zh' ? meta.keywords : meta.keywordsEn;
+  const paragraphs: Paragraph[] = [];
+
+  if (text) {
+    const style = resolveStyle(template, bodyRole);
+    paragraphs.push(new Paragraph({
+      children: styledRuns(text, style),
+      indent: indentOf(style),
+      alignment: mapAlignment(style.paragraph.alignment),
+      spacing: {
+        before: style.paragraph.spaceBefore,
+        after: style.paragraph.spaceAfter,
+        ...lineStyle(style),
+      },
+    }));
+  }
+
+  if (words && words.length > 0) {
+    const style = resolveStyle(template, keywordRole);
+    const label = language === 'zh' ? '关键词：' : 'Key words: ';
+    const separator = language === 'zh' ? '；' : ', ';
+    paragraphs.push(new Paragraph({
+      children: [
+        ...styledRuns(label, style, true),
+        ...styledRuns(words.join(separator), style),
+      ],
+      indent: indentOf(style),
+      alignment: mapAlignment(style.paragraph.alignment),
+      spacing: {
+        before: style.paragraph.spaceBefore,
+        after: style.paragraph.spaceAfter,
+        ...lineStyle(style),
+      },
+    }));
+  }
+  return paragraphs;
+}
+
 /** A 目录 is a field, not text — see `tocBlock`. */
 /**
  * A paragraph whose only job is to start a new page.
@@ -2091,13 +2146,36 @@ function renderThesisParts(
     });
   }
 
-  if (frontMatter.length > 0) {
+  // A thesis that filled `meta.abstract` in but wrote no `abstract` section was
+  // getting nothing: those fields were only read by the journal renderer.
+  const hasZhAbstract = frontMatter.some(section => section.type === 'abstract' && section.title === '摘要');
+  const hasEnAbstract = frontMatter.some(section => section.type === 'abstract' && section.title !== '摘要');
+  let generateZhAbstract = false;
+  let generateEnAbstract = false;
+  if (!hasZhAbstract && (doc.meta?.abstract || doc.meta?.keywords?.length)) {
+    generateZhAbstract = true;
+  }
+  if (!hasEnAbstract && (doc.meta?.abstractEn || doc.meta?.keywordsEn?.length)) {
+    generateEnAbstract = true;
+  }
+  const allFrontMatter = frontMatter;
+  if (allFrontMatter.length > 0 || generateZhAbstract || generateEnAbstract) {
     // Document order inside the front matter: the 目录 field keeps its place
     // (摘要, ABSTRACT, 目录 …) rather than being hoisted. Every front-matter
     // section is laid out before the body part anyway, so the 目录 still cannot
     // end up after a chapter.
     const children: (Paragraph | Table)[] = [];
-    for (const section of frontMatter) {
+    // A thesis that filled `meta.abstract` in but wrote no `abstract` section was
+    // getting nothing: those fields were only read by the journal renderer.
+    const generated: Array<{ title: string; language: 'zh' | 'en' }> = [];
+    if (generateZhAbstract) generated.push({ title: '摘要', language: 'zh' });
+    if (generateEnAbstract) generated.push({ title: 'Abstract', language: 'en' });
+    for (const page of generated) {
+      if (children.length > 0) children.push(pageBreakParagraph());
+      children.push(renderHeading(template, { type: 'heading1', text: page.title, styleRole: 'section_heading' }));
+      children.push(...renderGeneratedAbstract(doc.meta, page.language, template));
+    }
+    for (const section of allFrontMatter) {
       // Each front-matter part begins on its own page: 摘要, Abstract, 目录 and
       // 图表清单 are separate pages in the guide, not one continuous flow.
       if (children.length > 0) children.push(pageBreakParagraph());

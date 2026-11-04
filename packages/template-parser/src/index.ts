@@ -1361,6 +1361,13 @@ function detectStyleRoles(
     // against 段后17磅 and 1.3倍 — and the USTB template has a style for them
     // (`u标题`, `u附录标题`) that used to be read as just another heading1.
     { regex: /^(u?标题|u?附录标题|.*标题\s*不入目录|摘要|目录|致谢|参考文献|序)$/i, role: 'section_heading' },
+    // The 摘要 body and its 关键词 line. A template that carries these has its own
+    // rule for them (the USTB guide sets the label 黑体 and the text 宋体), and a
+    // template without them falls back to the body style.
+    { regex: /^(摘要正文|中文摘要|Abstract摘要|u?摘要内容)$/i, role: 'thesis_abstract' },
+    { regex: /^(英文摘要|Abstract\s*(body|text)?|English\s*Abstract)$/i, role: 'thesis_abstract_en' },
+    { regex: /^(关键词|u?关键字|Keywords?)$/i, role: 'thesis_keywords' },
+    { regex: /^(Key\s*words?|English\s*Keywords?)$/i, role: 'thesis_keywords_en' },
     // Reference entries under that heading.
     { regex: /^u?参考文献条目.*$/i, role: 'reference_item' },
     // Table-of-contents entries. Word writes them with these styles when the TOC
