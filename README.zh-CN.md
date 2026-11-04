@@ -23,7 +23,7 @@
 
 ---
 
-**一个引擎，无限模板。** 解析任意 `.docx` 模板，使用 Markdown 或结构化 JSON 写作，导出可直接提交且可继续编辑的 DOCX。
+**一个引擎，无限模板。** 解析 `.docx` 模板，或从文本型 `.pdf` 参照文件中推断可复用样式；使用 Markdown 或结构化 JSON 写作，导出可直接提交且可继续编辑的 DOCX。
 
 适用于**高校学位论文**、**期刊论文**和**党政机关公文**，可处理字体、页边距、页眉页脚、页码、表格和公式等排版要求。
 
@@ -34,7 +34,7 @@
 | 传统方案 | OpenThesis |
 | --- | --- |
 | 只向模板中填充数据 | 理解标题、摘要、发文字号等语义角色 |
-| 针对单个模板硬编码 | 解析任意 `.docx` 模板并生成 JSON 样式 DSL |
+| 针对单个模板硬编码 | 解析 DOCX 或推断文本型 PDF 布局并生成 JSON 样式 DSL |
 | 格式参数散落在代码中 | 所有格式由解析后的模板驱动 |
 | Markdown 通常导出 LaTeX | Markdown 或 JSON 直接生成可编辑 DOCX |
 | 仅支持单一文档类型 | 一个引擎覆盖论文、期刊和公文 |
@@ -43,12 +43,33 @@
 
 ```mermaid
 graph TD
-    A["Word 模板 .docx"] --> C["模板解析器"]
+    A["DOCX 模板或文本型 PDF 参照"] --> C["模板解析器"]
     B["Markdown 或 JSON 内容"] --> D["内容解析与校验"]
     C --> E["DOCX 渲染器"]
     D --> E
     E --> F["可提交的 DOCX 文档"]
 ```
+
+## PDF 模板支持
+
+许多高校、期刊和政府部门只发布 PDF 格式的排版规范或示例文件。OpenThesis 现在可以直接解析**文本型 PDF**，推断出驱动 DOCX 输出的 OpenThesis 模板。
+
+| 输入 | 当前支持情况 | 说明 |
+| --- | --- | --- |
+| `.docx` 模板 | ✅ 原生支持 | 可提取命名样式、继承关系、页面尺寸、页眉页脚和分栏设置 |
+| 文本型 `.pdf` | ✅ 启发式推断 | 推断页面尺寸、页边距、分栏、字体、字号、对齐、行距和语义角色 |
+| 扫描型 `.pdf` | ⚠️ 需要 OCR | PDF 没有可提取文字时会返回明确的 OCR 提示 |
+| Markdown / OpenThesis JSON | ✅ 原生支持 | 作为文档内容输入，并渲染为可编辑 DOCX |
+
+```bash
+node packages/cli/dist/index.js parse 格式说明.pdf \
+  --type thesis --org "XX大学"
+# → 格式说明.template.json
+```
+
+PDF 保存的是定位后的字符，而不是 Word 的命名样式。OpenThesis 会把文字组合成行，聚类字体和字号，识别主要正文样式，并把较大或居中的样式映射为标题。生成的 JSON 会保留警告，因为 PDF 中没有记录的信息无法被凭空恢复。
+
+正式使用前应检查生成的模板。精确表格边框、绘图对象、页眉页脚、脚注和扫描页面暂不在第一版 PDF 支持范围内；高级重建和内置 OCR 计划在 V4 实现。
 
 ## 快速开始
 
@@ -61,8 +82,9 @@ pnpm install && pnpm build
 # 2. 直接构建仓库内的 Markdown 示例
 node packages/cli/dist/index.js build examples/sample-thesis.md -o output.docx
 
-# 3. 解析学校或期刊的 Word 模板
+# 3. 解析 DOCX 模板或文本型 PDF 参照
 node packages/cli/dist/index.js parse 你的学校模板.docx --type thesis --org "XX大学"
+node packages/cli/dist/index.js parse 期刊格式说明.pdf --type journal --org "期刊名称"
 
 # 4. 创建结构化内容示例
 node packages/cli/dist/index.js init --type thesis
@@ -79,7 +101,7 @@ node packages/cli/dist/index.js import manuscript.md --type thesis -o manuscript
 
 ## Agent Skill
 
-OpenThesis 在 `.codex/skills/openthesis` 中提供标准仓库 Skill。Agent 可以通过 `$openthesis` 显式调用，也可以在论文、期刊、公文、Word 模板和 Markdown 转 DOCX 等任务中自动发现它。
+OpenThesis 在 `.codex/skills/openthesis` 中提供标准仓库 Skill。Agent 可以通过 `$openthesis` 显式调用，也可以在论文、期刊、公文、Word/PDF 模板和 Markdown 转 DOCX 等任务中自动发现它。
 
 ```bash
 node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
@@ -100,7 +122,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 | --- | --- |
 | `@openthesis/document-schema` | 论文、期刊和公文的领域模型 |
 | `@openthesis/markdown-parser` | Markdown 与 front matter 转结构化文档 JSON |
-| `@openthesis/template-parser` | `.docx` 模板转带继承关系的 JSON 样式 DSL |
+| `@openthesis/template-parser` | 解析 DOCX 或推断文本型 PDF 布局，生成 JSON 样式 DSL |
 | `@openthesis/docx-renderer` | 模板驱动的 DOCX 渲染器 |
 | `@openthesis/equation-engine` | LaTeX 数学 AST、原生 OMML 与兼容回退 |
 | `@openthesis/cli` | `parse`、`import`、`init` 和 `build` 命令行工具 |
@@ -108,6 +130,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 ## 主要能力
 
 - ✅ 解析并递归合并 DOCX 样式继承关系
+- ✅ 将文本型 PDF 的字体和页面几何信息推断为可复用模板
 - ✅ 根据样式名称和大纲级别识别标题、摘要等语义角色
 - ✅ 提取页面尺寸、页边距和分栏设置
 - ✅ 表格边框、底纹和列宽控制
@@ -127,6 +150,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 - pnpm workspace 单体仓库
 - dolanmiu/docx
 - JSZip 与 fast-xml-parser
+- PDF.js
 - Node.js ≥ 22
 
 ## 路线图
@@ -136,7 +160,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 | V1 | 核心解析、渲染与 CLI | ✅ 完成 |
 | V2 | 图片、双栏输出与 Markdown 解析器 | ✅ 完成 |
 | V3 | 原生 LaTeX → OMML | 🚧 进行中（核心与常用高级子集） |
-| V4 | 基于机器学习的模板布局理解 | 📋 未来计划 |
+| V4 | 高级 PDF 重建：OCR、表格、页眉页脚和机器学习语义识别 | 📋 未来计划 |
 | V5 | 自动生成论文内容的 AI Agent | 📋 未来计划 |
 | SaaS | 社区贡献的模板市场 | 📋 未来计划 |
 
@@ -150,7 +174,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 
 ## 参与贡献
 
-如果你希望 OpenThesis 支持某个高校或期刊的 `.docx` 模板，欢迎提交 issue 并附上模板或下载链接。
+如果你希望 OpenThesis 支持某个高校或期刊的 `.docx` 或文本型 `.pdf` 模板，欢迎提交 issue 并附上模板或下载链接。
 
 欢迎提交 PR。开发流程参见 [CONTRIBUTING.md](CONTRIBUTING.md)，架构说明参见 [CLAUDE.md](CLAUDE.md)。
 

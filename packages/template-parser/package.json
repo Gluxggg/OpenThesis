@@ -1,9 +1,10 @@
 {
   "name": "@openthesis/template-parser",
   "version": "0.2.0",
-  "description": "Parse any .docx template into structured JSON style DSL — resolves style inheritance, extracts fonts, sizes, margins, alignment",
+  "description": "Parse DOCX templates or infer text-based PDF layouts into a structured JSON style DSL",
   "keywords": [
     "docx",
+    "pdf",
     "template",
     "parser",
     "word",
@@ -46,7 +47,8 @@
   "dependencies": {
     "@openthesis/document-schema": "workspace:*",
     "fast-xml-parser": "^5.11.1",
-    "jszip": "^3.10"
+    "jszip": "^3.10",
+    "pdfjs-dist": "5.4.54"
   },
   "devDependencies": {
     "@types/node": "^22",

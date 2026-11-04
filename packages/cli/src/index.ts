@@ -3,7 +3,7 @@
 // @openthesis/cli — OpenThesis Command Line Interface
 // ============================================================
 // Usage:
-//   thesis parse <template.docx> [--type thesis|journal|official] [--org <name>] [--force]
+//   thesis parse <template.docx|pdf> [--type thesis|journal|official] [--org <name>] [--force]
 //   thesis import <content.md> [--type thesis|journal|official] [-o <content.json>] [--force]
 //   thesis build <content.json|content.md> [-t <template.json>] [-o <output.docx>] [--force]
 //   thesis init [--type thesis|journal|official] [--force]
@@ -12,7 +12,7 @@
 
 import { readFileSync, writeFileSync, realpathSync, mkdirSync, existsSync } from 'fs';
 import { resolve, dirname, extname, basename } from 'path';
-import { parseTemplate } from '@openthesis/template-parser';
+import { parsePdfTemplate, parseTemplate } from '@openthesis/template-parser';
 import { parseMarkdown } from '@openthesis/markdown-parser';
 import { renderLegacy, createUSTBTemplate, renderDocument } from '@openthesis/docx-renderer';
 import { validateDocument, validateLegacyDocument, formatIssues } from '@openthesis/document-schema';
@@ -96,18 +96,19 @@ function cmdImport(args: string[]) {
   }
 }
 
-// ── thesis parse <template.docx> ──────────────────────────
+// ── thesis parse <template.docx|pdf> ──────────────────────
 
 async function cmdParse(args: string[]) {
   rejectUnknownFlags(command, args);
   if (args.length < 1) {
-    console.error('Usage: thesis parse <template.docx> [--type thesis|journal|official] [--org <name>]');
+    console.error('Usage: thesis parse <template.docx|pdf> [--type thesis|journal|official] [--org <name>]');
     process.exit(1);
   }
 
   const templatePath = resolve(args[0]);
-  if (extname(templatePath).toLowerCase() !== '.docx') {
-    console.error('Template input must be a .docx file.');
+  const templateExtension = extname(templatePath).toLowerCase();
+  if (!['.docx', '.pdf'].includes(templateExtension)) {
+    console.error('Template input must be a .docx or .pdf file.');
     process.exit(1);
   }
   const docType = validateDocType(readOption(args, '--type') ?? 'thesis');
@@ -118,7 +119,8 @@ async function cmdParse(args: string[]) {
 
   try {
     const buffer = readFileSync(templatePath);
-    const template = await parseTemplate(buffer, {
+    const parse = templateExtension === '.pdf' ? parsePdfTemplate : parseTemplate;
+    const template = await parse(buffer, {
       organization: orgName,
       documentType: docType,
       sourceFile: templatePath,
@@ -138,6 +140,7 @@ async function cmdParse(args: string[]) {
       console.log(`   Columns:   ${template.page.columns}`);
     }
     console.log(`   Styles:    ${Object.keys(template.styles).length} found, ${Object.keys(template.styleRoles).length} roles detected`);
+    for (const warning of template.meta.warnings ?? []) console.log(`   Warning:   ${warning}`);
     console.log(`\n   Style roles:`);
     for (const [styleId, role] of Object.entries(template.styleRoles)) {
       const style = template.styles[styleId];
@@ -618,12 +621,12 @@ function printHelp() {
   OpenThesis — AI-powered Document Template Engine
   ─────────────────────────────────────────────────
 
-  Parse any .docx template. Write in structured JSON.
+  Parse .docx or text-based .pdf templates. Write in structured JSON.
   Output submission-ready DOCX. For thesis, journal
   articles, and official documents (公文).
 
   Commands:
-    thesis parse <template.docx>     Parse template → JSON style DSL
+    thesis parse <template.docx|pdf> Parse template → JSON style DSL
     thesis import <content.md>        Convert Markdown → structured JSON
     thesis build <content.json|md>    Render document → .docx
     thesis init [--type <t>]          Create sample content file
@@ -635,6 +638,7 @@ function printHelp() {
 
   Examples:
     thesis parse 清华博士模板.docx --type thesis --org "清华大学"
+    thesis parse 学位论文格式.pdf --type thesis --org "XX大学"
     thesis parse elsevier-template.docx --type journal
     thesis parse 公文模板.docx --type official --org "XX省人民政府"
 

@@ -1,19 +1,19 @@
 ---
 name: openthesis
-description: "Convert academic manuscripts and Chinese official documents between Markdown or structured OpenThesis JSON and submission-ready DOCX, and parse DOCX templates into reusable style JSON. Use for thesis, journal, 公文, Markdown-to-DOCX, Word template parsing, document rendering, format validation, or troubleshooting OpenThesis CLI workflows."
+description: "Convert academic manuscripts and Chinese official documents between Markdown or structured OpenThesis JSON and submission-ready DOCX, parse DOCX templates, and infer reusable style JSON from text-based PDF references. Use for thesis, journal, 公文, Markdown-to-DOCX, Word/PDF template parsing, document rendering, format validation, or troubleshooting OpenThesis CLI workflows."
 ---
 
 # OpenThesis
 
 Use the repository's typed pipeline instead of constructing Word files ad hoc:
 
-`DOCX template → template JSON` and `Markdown/JSON content + template JSON → DOCX`.
+`DOCX/text-PDF template → template JSON` and `Markdown/JSON content + template JSON → DOCX`.
 
 ## Choose the workflow
 
 - For Markdown input, read [references/markdown.md](references/markdown.md), then use direct build unless the user also needs editable JSON.
 - For structured JSON, read [references/schema.md](references/schema.md) only when creating or repairing content blocks.
-- For a custom `.docx` template, parse it first and then render with the resulting `.template.json`.
+- For a custom `.docx` or text-based `.pdf` template reference, parse it first and then render with the resulting `.template.json`.
 - For setup, exact commands, validation, and failure recovery, read [references/workflows.md](references/workflows.md).
 
 ## Execute
@@ -28,6 +28,7 @@ Use the repository's typed pipeline instead of constructing Word files ad hoc:
 ## Guardrails
 
 - Do not invent university, publisher, or GB/T formatting rules that are absent from the parsed template.
+- Treat PDF-derived styles as heuristic. Report parser warnings, review the generated JSON, and request OCR when the PDF has no extractable text.
 - Do not silently discard unsupported Markdown; preserve it as plain paragraph text when possible and report material limitations. A parsed template's `warnings` array lists what the engine could not represent — pass it on.
 - Treat generated DOCX files as outputs, not source-of-truth content.
 - For equations, describe the supported core subset as native OMML and disclose that advanced macros or environments may fall back or render literally.

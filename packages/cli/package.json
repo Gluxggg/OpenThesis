@@ -1,8 +1,8 @@
 {
   "name": "@openthesis/cli",
   "version": "0.2.0",
-  "description": "OpenThesis CLI — parse templates and build thesis, journal, or official DOCX files from Markdown or JSON",
-  "keywords": ["docx", "cli", "thesis", "journal", "official-document", "template", "word", "document-generator"],
+  "description": "OpenThesis CLI — parse DOCX or PDF templates and build thesis, journal, or official DOCX files from Markdown or JSON",
+  "keywords": ["docx", "pdf", "cli", "thesis", "journal", "official-document", "template", "word", "document-generator"],
   "repository": { "type": "git", "url": "https://github.com/Gluxggg/OpenThesis.git", "directory": "packages/cli" },
   "homepage": "https://github.com/Gluxggg/OpenThesis#readme",
   "license": "MIT",
