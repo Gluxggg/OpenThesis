@@ -390,3 +390,30 @@ support.
 | H-5 | A table row with the wrong cell count was padded or truncated with no word to the caller. `validateDocument` reports it, but a caller using the renderer directly does not necessarily run the validator. | `styledRuns(row[ci] ?? '', bodyStyle)` | Fixed — the renderer warns which row, how many cells it has, and whether cells were added empty or dropped |
 
 `pnpm check`: 154 tests, all passing.
+
+---
+
+## 10. Layout-fidelity round
+
+The three items §9 left as "needs a content-model decision". Two of them now have
+one, and the third got an explicit rule instead of a redesign.
+
+| # | Finding | Decision | Status |
+|---|---|---|---|
+| L-1 | A cover gap could only be expressed as a line count. The guide fixes 5 cm between the cover tiers, and "five blank lines" is only as tall as the line height in force. | A spacer is a **height**: `lines`, `twips` or `cm`, exactly one. An exact height renders as one empty paragraph with `lineRule="exact"`, so 5 cm is 2834 twips regardless of typography. | Done — `SpacerBlock` widened, validated, rendered |
+| L-2 | A heading's number could only come from the content file. The template binds its heading styles to `w:num` instances through `w:numPr`, and nothing read `numbering.xml`. | **A `number` in the content wins; the template's numbering applies otherwise.** The author who wrote an exact label meant it, and silently replacing it with an automatic one would be the surprise. | Done — `word/numbering.xml` is parsed into `DocumentTemplate.numbering`, each style carries its `w:numPr` binding, and a heading with a binding and no written number gets the template's reference and level. `w:numId="0"` ("no numbering") is honoured. Not read: `w:lvlOverride` |
+| L-3 | A chapter that turns one passage landscape, or sets it in two columns, was flattened into whichever part it fell in. | A `section_break` block starts a new section and carries that section's page setup. Layout goes per-part whenever any part asks for its own, even if the template declares only one page setup. | Done — `SectionBreakBlock` with `orientation` / `columns` / `columnGutter`; the body is split at those markers, each chunk becomes its own section, and `PageSettings.orientation` now also reads a template's own `w:orient` |
+
+Two details worth recording:
+
+- The writer library swaps the page dimensions itself when told a page is
+  landscape. Swapping them first and telling it too cancels out — the emitted
+  section came out `w:w="11906" w:h="16838" w:orient="landscape"`, which is a
+  portrait page with a landscape label. Orientation is now passed through and
+  the swap is left to the library.
+- `section_break` is honoured inside a thesis body. The cover, the front
+  matter and the back matter are not split — they are already sections of their
+  own — and a break there is reported by a warning rather than dropped in
+  silence.
+
+`pnpm check`: 161 tests, all passing.

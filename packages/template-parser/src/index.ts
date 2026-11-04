@@ -17,6 +17,8 @@ import type {
   LineSpacingRule,
   RunningHeadSlots,
   StyleRole,
+  TemplateNumbering,
+  TemplateNumberingLevel,
   BlockType,
 } from '@openthesis/document-schema';
 
@@ -131,6 +133,8 @@ export async function parseTemplate(
 
   const warnings = buildWarnings(rawStyles, resolvedStyles, pageSections, cycles);
 
+  const numbering = await readNumbering(zip, parser);
+
   return {
     meta,
     page: pageSettings,
@@ -141,7 +145,61 @@ export async function parseTemplate(
     ...(Object.keys(roleWinners).length > 0 ? { roleWinners } : {}),
     styleInheritance: buildInheritanceMap(rawStyles),
     ...(warnings.length > 0 ? { warnings } : {}),
+    ...(numbering.length > 0 ? { numbering } : {}),
   };
+}
+
+/**
+ * `word/numbering.xml`, resolved into the shapes a heading needs.
+ *
+ * A template numbers its chapters by binding styles to `w:num` instances
+ * through `w:numPr`, and each instance points at an `w:abstractNum` whose
+ * levels say what the number looks like (`%1`, `%1.%2`, `附录 %1`). Nothing
+ * here was read before, so a chapter's number could only ever come from the
+ * content file — and the guide's own numbering was invisible.
+ *
+ * Not read: `w:lvlOverride` on a `w:num`. A template that overrides a level
+ * inline keeps the abstract definition instead.
+ */
+async function readNumbering(zip: JSZip, parser: XMLParser): Promise<TemplateNumbering[]> {
+  const file = zip.file('word/numbering.xml');
+  if (!file) return [];
+
+  const parsed = parser.parse(normalizeWordPrefix(await file.async('string')));
+  const root = parsed?.['w:numbering'];
+  if (!root) return [];
+
+  const abstracts = new Map<number, TemplateNumberingLevel[]>();
+  for (const abstract of asArray(root['w:abstractNum']) as any[]) {
+    const id = parseInt(abstract?.['@_w:abstractNumId']);
+    if (isNaN(id)) continue;
+    const levels: TemplateNumberingLevel[] = [];
+    for (const lvl of asArray(abstract['w:lvl']) as any[]) {
+      const ilvl = parseInt(lvl?.['@_w:ilvl']);
+      if (isNaN(ilvl)) continue;
+      const start = parseInt(lvl['w:start']?.['@_w:val']);
+      levels.push({
+        ilvl,
+        format: lvl['w:numFmt']?.['@_w:val'],
+        text: lvl['w:lvlText']?.['@_w:val'],
+        start: isNaN(start) ? undefined : start,
+        pStyle: lvl['w:pStyle']?.['@_w:val'],
+        suff: lvl['w:suff']?.['@_w:val'],
+      });
+    }
+    abstracts.set(id, levels.sort((a, b) => a.ilvl - b.ilvl));
+  }
+
+  const numbering: TemplateNumbering[] = [];
+  for (const num of asArray(root['w:num']) as any[]) {
+    const numId = parseInt(num?.['@_w:numId']);
+    const abstractId = parseInt(num?.['w:abstractNumId']?.['@_w:val']);
+    if (isNaN(numId) || isNaN(abstractId)) continue;
+    const levels = abstracts.get(abstractId);
+    if (!levels) continue;
+    numbering.push({ numId, abstractId, levels });
+  }
+  return numbering;
 }
 
 /**
@@ -250,6 +308,8 @@ interface RawParagraphProps {
   keepNext?: boolean;
   keepLines?: boolean;
   pageBreakBefore?: boolean;
+  /** `w:numPr`: the numbering this style is bound to. `numId: 0` means "none". */
+  numbering?: { numId: number; ilvl: number };
 }
 
 interface RawRunProps {
@@ -402,6 +462,17 @@ function extractParagraphProps(pPr: any, runSize?: number): RawParagraphProps | 
   // (`<w:keepNext/>`). fast-xml-parser turns those into the empty string, which
   // is falsy — so `if (pPr['w:keepNext'])` never fired for a real Word file.
   // The shipped asset only carries `pageBreakBefore` because it was written into
+  // Numbering binding. A template that numbers its chapters binds a style to a
+  // `w:num` instance here; without it the number can only come from the content.
+  const numPr = firstElement(pPr['w:numPr']);
+  if (numPr) {
+    const numId = parseInt(numPr['w:numId']?.['@_w:val']);
+    const ilvl = parseInt(numPr['w:ilvl']?.['@_w:val']);
+    if (!isNaN(numId)) {
+      props.numbering = { numId, ilvl: isNaN(ilvl) ? 0 : ilvl };
+    }
+  }
+
   // the JSON by hand from the university guide, not because parsing produced it.
   if (flagOn(pPr['w:keepNext'])) props.keepNext = true;
   if (flagOn(pPr['w:keepLines'])) props.keepLines = true;
@@ -673,6 +744,7 @@ function rawToParagraphStyle(raw: RawStyle): ParagraphStyle {
       // style, then dropped here because the schema had no field for them.
       keepNext: raw.pPr?.keepNext,
       keepLines: raw.pPr?.keepLines,
+      numbering: raw.pPr?.numbering,
       firstLineIndent: indentFirstLine,
       hangingIndent: raw.pPr?.indent?.hanging,
       leftIndent: indentLeft,
@@ -1019,11 +1091,14 @@ function sectPrToPageSettings(
 
   let width = 11906;   // A4 default in twips
   let height = 16838;
+  let orientation: 'portrait' | 'landscape' | undefined;
   if (pgSz) {
     const w = parseInt(pgSz['@_w:w']);
     const h = parseInt(pgSz['@_w:h']);
     if (!isNaN(w)) width = w;
     if (!isNaN(h)) height = h;
+    const orient = pgSz['@_w:orient'];
+    if (orient === 'portrait' || orient === 'landscape') orientation = orient;
   }
 
   const margins = {
@@ -1097,6 +1172,7 @@ function sectPrToPageSettings(
 
   return {
     width, height, margins, headerDistance, footerDistance, gutter, mirrorMargins, columns, columnGutter,
+    ...(orientation ? { orientation } : {}),
     ...(docGrid && (docGrid.type || docGrid.linePitch !== undefined || docGrid.charSpace !== undefined) ? { docGrid } : {}),
     ...(pageNumberFormat ? { pageNumberFormat } : {}),
     ...(Number.isFinite(pageNumberStart) ? { pageNumberStart } : {}),

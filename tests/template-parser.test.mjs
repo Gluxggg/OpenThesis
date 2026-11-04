@@ -629,3 +629,35 @@ test('a long basedOn chain still resolves every inherited property', async () =>
   assert.equal(leaf.font.bold, true, 'the leaf own override applies');
   assert.equal(leaf.paragraph.leftIndent, 390, 'the nearest indent wins');
 });
+
+test('reads numbering.xml and the styles it binds', async () => {
+  // A template numbers its chapters by binding styles to w:num instances through
+  // w:numPr. None of that was read, so a heading number could only come from the
+  // content file.
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const zip = new JSZip();
+  zip.file('word/styles.xml', `<?xml version="1.0"?><w:styles xmlns:w="${W}">
+    <w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>
+    <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:sz w:val="24"/></w:rPr></w:style>
+    <w:style w:type="paragraph" w:styleId="ch"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/>
+      <w:pPr><w:outlineLvl w:val="0"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr></w:style>
+  </w:styles>`);
+  zip.file('word/numbering.xml', `<?xml version="1.0"?><w:numbering xmlns:w="${W}">
+    <w:abstractNum w:abstractNumId="0">
+      <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:pStyle w:val="ch"/><w:lvlText w:val="第%1章"/></w:lvl>
+    </w:abstractNum>
+    <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+  </w:numbering>`);
+  zip.file('word/document.xml', `<?xml version="1.0"?><w:document xmlns:w="${W}"><w:body>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>`);
+
+  const template = await parseTemplate(await zip.generateAsync({ type: 'nodebuffer' }), { documentType: 'thesis' });
+
+  assert.equal(template.numbering.length, 1);
+  assert.equal(template.numbering[0].numId, 1);
+  assert.deepEqual(
+    template.numbering[0].levels.map(l => ({ ilvl: l.ilvl, text: l.text, format: l.format, pStyle: l.pStyle })),
+    [{ ilvl: 0, text: '第%1章', format: 'decimal', pStyle: 'ch' }],
+  );
+  assert.deepEqual(template.styles.ch.paragraph.numbering, { numId: 1, ilvl: 0 });
+});

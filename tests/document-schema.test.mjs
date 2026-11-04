@@ -216,3 +216,47 @@ test('reports a table with no caption instead of letting the renderer crash on i
   empty.sections[0].content[1].caption = '';
   assert.deepEqual(validateDocument(empty), []);
 });
+
+test('a spacer must declare exactly one unit', () => {
+  const base = () => ({
+    type: 'thesis', meta: { title: 'S' }, cover: [], sections: [{ id: 'c', type: 'chapter', title: 'C', content: [] }],
+  });
+
+  const none = base();
+  none.cover = [{ type: 'spacer' }];
+  assert.equal(validateDocument(none)[0].path, 'cover[0]');
+  assert.match(validateDocument(none)[0].message, /one of lines, twips or cm/);
+
+  const both = base();
+  both.cover = [{ type: 'spacer', lines: 2, cm: 5 }];
+  assert.match(validateDocument(both)[0].message, /only one of lines, twips or cm/);
+
+  const ok = base();
+  ok.cover = [{ type: 'spacer', cm: 5 }];
+  assert.deepEqual(validateDocument(ok), []);
+});
+
+test('a section break rejects a page setup it cannot honour', () => {
+  const doc = {
+    type: 'thesis', meta: { title: 'S' },
+    cover: [{ type: 'section_break', page: { orientation: 'sideways' } }],
+    sections: [{ id: 'c', type: 'chapter', title: 'C', content: [] }],
+  };
+  const issues = validateDocument(doc);
+  assert.equal(issues[0].path, 'cover[0].page.orientation');
+  assert.match(issues[0].message, /"portrait" or "landscape"/);
+
+  const bad = {
+    type: 'thesis', meta: { title: 'S' },
+    cover: [{ type: 'section_break', page: { columns: 0 } }],
+    sections: [{ id: 'c', type: 'chapter', title: 'C', content: [] }],
+  };
+  assert.equal(validateDocument(bad)[0].path, 'cover[0].page.columns');
+
+  const ok = {
+    type: 'thesis', meta: { title: 'S' },
+    cover: [{ type: 'section_break', page: { orientation: 'landscape', columns: 2 } }],
+    sections: [{ id: 'c', type: 'chapter', title: 'C', content: [] }],
+  };
+  assert.deepEqual(validateDocument(ok), []);
+});

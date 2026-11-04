@@ -1295,3 +1295,120 @@ test('a table row with the wrong cell count warns instead of padding in silence'
   assert.ok(short, `expected a missing-cells warning, got: ${JSON.stringify(warnings)}`);
   assert.ok(long, `expected a dropped-cells warning, got: ${JSON.stringify(warnings)}`);
 });
+
+test('a spacer can be an exact height, so a cover gap is a measurement', async () => {
+  // The guide fixes 5 cm between the cover tiers. Five blank lines is only as
+  // tall as the line height in force, which is how the spacing got lost.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Spacer' },
+      cover: [
+        { type: 'centered_text', text: '校名' },
+        { type: 'spacer', cm: 5 },
+        { type: 'centered_text', text: '标题' },
+      ],
+      sections: [{ id: 'c1', type: 'chapter', title: 'Chapter', content: [] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  // 5 cm = 50 mm; at 1440 twips per inch that is 2834 twips (the library rounds
+  // down).
+  assert.match(xml, /w:line="2834" w:lineRule="exact"/);
+});
+
+test('a line-count spacer still renders one blank paragraph per line', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Spacer lines' },
+      cover: [{ type: 'spacer', lines: 3 }],
+      sections: [{ id: 'c1', type: 'chapter', title: 'Chapter', content: [] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const blank = [...xml.matchAll(/<w:spacing w:line="312"\/>/g)].length;
+  assert.equal(blank, 3);
+});
+
+test('a heading bound to template numbering is numbered, and a written number wins', async () => {
+  // The rule: a `number` in the content file is the author's exact label and is
+  // kept; otherwise the template's own numbering applies.
+  const tpl = structuredClone(template);
+  tpl.styles.NumHeading = {
+    font: { name: 'Times New Roman', eastAsia: '黑体', size: 30, bold: true },
+    paragraph: { alignment: 'left', numbering: { numId: 7, ilvl: 0 } },
+    lineSpacing: 312,
+  };
+  tpl.styleRoles.NumHeading = 'heading1';
+  tpl.roleWinners.heading1 = 'NumHeading';
+  tpl.numbering = [{
+    numId: 7,
+    abstractId: 3,
+    levels: [{ ilvl: 0, format: 'decimal', text: '第%1章', start: 1, pStyle: 'NumHeading' }],
+  }];
+
+  const buffer = await renderDocument({
+    template: tpl,
+    document: {
+      type: 'thesis', meta: { title: 'Numbering' }, cover: [],
+      sections: [{
+        id: 'c1', type: 'chapter', title: 'Auto numbered', content: [
+          { type: 'heading2', text: 'Manual', number: '2.9' },
+        ],
+      }],
+    },
+  });
+  const zip = await JSZip.loadAsync(buffer);
+  const doc = await zip.file('word/document.xml').async('string');
+  const numberingXml = await zip.file('word/numbering.xml').async('string');
+
+  // The template's level text reaches the package.
+  assert.match(numberingXml, /第%1章/);
+
+  const headingAt = doc.indexOf('Auto numbered');
+  const paragraphBefore = doc.slice(doc.lastIndexOf('<w:p>', headingAt), headingAt);
+  assert.match(paragraphBefore, /<w:numPr>/, 'the bound heading should carry a numbering reference');
+
+  // The manual number is rendered as text and does not also take auto numbering.
+  const manualAt = doc.indexOf('2.9');
+  assert.ok(manualAt >= 0, 'the written number should be in the text');
+  const manualParagraph = doc.slice(doc.lastIndexOf('<w:p>', manualAt), doc.indexOf('</w:p>', manualAt));
+  assert.doesNotMatch(manualParagraph, /<w:numPr>/);
+});
+
+test('a section break inside the body starts a new section with its own page setup', async () => {
+  // A chapter that turns one passage landscape, or sets it in two columns, is a
+  // section change inside the body. It used to be flattened into whichever part
+  // it fell in, so the passage came out portrait and single-column.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Layout' }, cover: [{ type: 'centered_text', text: '封面' }],
+      sections: [{
+        id: 'c1', type: 'chapter', title: 'Chapter One',
+        content: [
+          { type: 'paragraph', text: 'portrait body' },
+          { type: 'section_break', page: { orientation: 'landscape', columns: 2, columnGutter: 425 } },
+          { type: 'paragraph', text: 'landscape two columns' },
+        ],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const sections = [...xml.matchAll(/<w:sectPr[\s\S]*?<\/w:sectPr>/g)].map(m => m[0]);
+
+  const landscape = sections.find(s => /w:orient="landscape"/.test(s));
+  assert.ok(landscape, 'expected a landscape section');
+  // The writer swaps the dimensions for landscape; the template's A4 becomes
+  // 16838 x 11906.
+  assert.match(landscape, /<w:pgSz w:w="16838" w:h="11906" w:orient="landscape"\/>/);
+  assert.match(landscape, /<w:cols w:space="425" w:num="2"\/>/);
+
+  // The passage after the break is in that section; the one before it is not.
+  const landscapeAt = xml.indexOf('landscape two columns');
+  const portraitAt = xml.indexOf('portrait body');
+  assert.ok(portraitAt >= 0 && landscapeAt > portraitAt);
+  const sectionStart = xml.lastIndexOf('<w:sectPr', landscapeAt);
+  assert.ok(sectionStart > portraitAt, 'the landscape section starts after the portrait passage');
+});
