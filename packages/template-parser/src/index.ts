@@ -1423,6 +1423,35 @@ function detectStyleRoles(
     { regex: /^(Abstract|摘要)$/i, role: 'journal_abstract' },
     { regex: /^(Keywords?|Key\s*words?|关键词)$/i, role: 'journal_keywords' },
 
+    // Elsevier's own template family, by its `Els` prefix. These are the names a
+    // real Elsevier Word template carries, so a template from the publisher binds
+    // its own styles instead of falling back to defaults.
+    { regex: /^ElsArticleTitle$/i, role: 'journal_title' },
+    { regex: /^ElsDocumenttitle$/i, role: 'journal_title' },
+    { regex: /^ElsAuthor$/i, role: 'journal_author' },
+    { regex: /^ElsCorrespondingAuthor$/i, role: 'journal_author' },
+    { regex: /^ElsAffiliation$/i, role: 'journal_affiliation' },
+    { regex: /^ElsAbstractHead$/i, role: 'journal_abstract' },
+    { regex: /^ElsAbstractText$/i, role: 'journal_abstract' },
+    { regex: /^ElsKeywordHead$/i, role: 'journal_keywords' },
+    { regex: /^ElsKeyword$/i, role: 'journal_keywords' },
+    { regex: /^ElsFigureCaption$/i, role: 'figure_caption' },
+    { regex: /^ElsTableCaption$/i, role: 'table_caption' },
+    { regex: /^ElsLegend$/i, role: 'table_caption' },
+    { regex: /^ElsSchemeCaption$/i, role: 'figure_caption' },
+    { regex: /^ElsReferences$/i, role: 'reference_item' },
+    { regex: /^ElsReferencesHeading$/i, role: 'section_heading' },
+    { regex: /^ElsAcknowledgementsHeading$/i, role: 'section_heading' },
+    { regex: /^ElsParagraph$/i, role: 'paragraph' },
+    { regex: /^ElsDisplayMath$/i, role: 'equation' },
+    { regex: /^ElsChemEquation$/i, role: 'equation' },
+    { regex: /^ElsHeading1$/i, role: 'heading1' },
+    { regex: /^ElsHeading2$/i, role: 'heading2' },
+    { regex: /^ElsHeading3$/i, role: 'heading3' },
+    { regex: /^ElsHeading4$/i, role: 'heading4' },
+    { regex: /^ElsHeading5$/i, role: 'heading5' },
+    { regex: /^ElsDocumentHeading$/i, role: 'section_heading' },
+
     // Figure and table captions are separate roles: the guide spaces a table
     // caption (段前1行) differently from a figure caption (段前0.1行).
     { regex: /^(u?图标题|图题|Figure\s*Caption|Caption|Figure|Figure\s*With\s*Caption|Image\s*Caption)$/i, role: 'figure_caption' },

@@ -1101,3 +1101,53 @@ table ran through the column rule and off the edge of the paper. There is a
 `contentWidth()` helper now, and a table on a multi-column page fits one column.
 
 `pnpm check`: 223 tests, all passing.
+
+---
+
+## 25. Elsevier's own templates, and the two defects they exposed
+
+The previous round used HardwareX's fill-in sheet, which declares no named styles.
+Elsevier also ships a **styled** article template (`Els*` family), and against that
+one the renderer found two real defects.
+
+### The `Els` style family
+
+| Role | Elsevier style |
+|---|---|
+| Title | `ElsArticleTitle` |
+| Authors | `ElsAuthor`, `ElsCorrespondingAuthor` |
+| Affiliation | `ElsAffiliation` |
+| Abstract | `ElsAbstractText` |
+| Keywords | `ElsKeyword` |
+| Figure caption | `ElsFigureCaption`, `ElsSchemeCaption` |
+| Table caption | `ElsTableCaption`, `ElsLegend` |
+| References | `ElsReferences` |
+| Body | `ElsParagraph` |
+| Section headings | `ElsHeading1..5` |
+| Equations | `ElsDisplayMath` |
+
+Recognised roles on that template: **7 of 54 styles before, 17 after.**
+
+### Defect 1: headings numbered twice
+
+`ElsHeading1` is bound to a Word numbering instance (`numId 42`). A heading whose
+text already carries its number — `1. Introduction` — therefore came out as
+**`1. 1. Introduction`**: the template numbered a heading that had numbered itself.
+
+A heading is now self-numbered when its text starts with `1`, `1.1`, `第1章` or
+similar, and the template's numbering is suppressed for it.
+
+### Defect 2: the table squeezed until words broke
+
+The template's example table declares `columnWidths` summing to 10548 twips — the
+full page. Scaled down proportionally into one column of a two-column page, a
+7707-twip column became 380 and `DOCX template` broke across four lines.
+
+| Approach | Result |
+|---|---|
+| scale the template's proportions down | columns too narrow; text wraps mid-cell |
+| **ignore them when they do not fit, split equally** | readable |
+
+The template's proportions describe a different page, so they say nothing here.
+
+`pnpm check`: 223 tests, all passing.
