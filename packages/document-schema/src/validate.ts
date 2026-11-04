@@ -48,7 +48,9 @@ const REQUIRED_STRING_FIELDS: Record<string, readonly string[]> = {
   centered_text: ['text'],
   equation: ['latex'],
   equation_numbered: ['latex'],
-  figure: ['path', 'caption'],
+  // `path` is required only for a single-image figure; a group figure carries its
+  // images in `items`, so that check lives where the block is walked.
+  figure: ['caption'],
   list_item: ['text'],
   code_block: ['text'],
   blockquote: ['text'],
@@ -391,6 +393,30 @@ function validateBlock(value: unknown, path: string, report: Report): void {
         report(path, `must be a non-negative number, received ${describe(given)}`);
       } else if (value.lines !== undefined && !Number.isInteger(value.lines)) {
         report(`${path}.lines`, `must be an integer number of lines, received ${describe(value.lines)}`);
+      }
+      break;
+    }
+    case 'figure': {
+      const items = value.items;
+      if (items !== undefined) {
+        if (!Array.isArray(items) || items.length === 0) {
+          report(`${path}.items`, `must be a non-empty array, received ${describe(items)}`);
+          break;
+        }
+        items.forEach((item, index) => {
+          if (!isObject(item)) {
+            report(`${path}.items[${index}]`, `must be an object, received ${describe(item)}`);
+            return;
+          }
+          if (!isNonEmptyString(item.path)) {
+            report(`${path}.items[${index}].path`, `must be a non-empty string, received ${describe(item.path)}`);
+          }
+        });
+      } else if (!isNonEmptyString(value.path)) {
+        report(`${path}.path`, `must be a non-empty string when the figure has no items, received ${describe(value.path)}`);
+      }
+      if (value.columns !== undefined && (!Number.isInteger(value.columns) || (value.columns as number) < 1)) {
+        report(`${path}.columns`, `must be a positive integer, received ${describe(value.columns)}`);
       }
       break;
     }

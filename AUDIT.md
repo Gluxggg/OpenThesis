@@ -570,3 +570,55 @@ number. The author cannot know a table will become 表3-1, so naming it by id is
 the form that survives automatic numbering.
 
 `pnpm check`: 175 tests, all passing.
+
+---
+
+## 14. Visual verification, group figures, and a LibreOffice defect
+
+The previous rounds verified XML. This one renders the `.docx` to images with the
+installed LibreOffice Kit and looks at the result. That found three things XML
+inspection could not.
+
+### Three defects the pictures exposed
+
+| # | What the page showed | Cause | Status |
+|---|---|---|---|
+| V-1 | A three-line table drew a rule between **every** row and column, and around the outside | An absent border was written as `w:val="none"`, then as `w:val="nil"`. LibreOffice treats both as "use the default grid" and rules the whole table | Fixed — an absent rule is now a **white hairline** (`single`, `sz=2`, `FFFFFF`). Verified by rendering one table three ways and comparing the images: `none` and `nil` both drew a grid, white drew nothing |
+| V-2 | Tables in a document with a cover **vanished entirely** | `w:pgNumType w:start="1"` on a non-first section makes LibreOffice drop that section's tables. Isolated by bisection: same table, no cover → renders; with cover → gone. `start="2"` renders, `start="1"` does not; a single-section document with `start="1"` renders fine. Five workarounds tried and none helped: explicit `w:type`, `w:cols`, `w:titlePg`, an empty paragraph before the table, and reordering the section properties | **Not fixed — it is a viewer defect.** The attribute is required for the body to restart its page numbering at 1, Word honours it, and dropping it would make every thesis page number wrong. Recorded here so it is not "fixed" later by deleting the attribute |
+| V-3 | Long tables **do** repeat their header row across the page break | — | Already correct; `w:tblHeader` on the header row works. Confirmed on a 40-row table: page 2 opens with the ruled header, and the bottom rule appears only at the true end of the table |
+
+### Group figures — 图1(a), (b), (c)
+
+`FigureBlock` gains `items` and `columns`:
+
+```json
+{ "type": "figure", "caption": "三种工况对比",
+  "items": [
+    { "path": "panel_a.png", "caption": "工况一" },
+    { "path": "panel_b.png", "caption": "工况二" },
+    { "path": "panel_c.png", "caption": "工况三" }
+  ] }
+```
+
+Rendered as a **borderless layout table** — the way Word itself does side-by-side
+panels — one cell per panel holding the image, then its label, then its own
+caption. The group is numbered once and bookmarked like any other figure, so
+`[[图1-1]]` refers to the whole figure; the letters label the panels and do not
+consume numbers. `columns` wraps panels onto further rows; labels default to
+`(a)`, `(b)`, … in reading order.
+
+`FigureBlock.path` is optional now, because a group figure carries its images in
+`items`. The validator requires a caption either way, and requires `path` only
+when there are no items.
+
+### What the rendering confirmed
+
+```
+table 1  three-line       top rule, header rule, no internal rules, bottom rule   OK
+table 2  40 rows          header repeated on page 2, bottom rule only at the end  OK
+figure   single image     centred, caption 图1-1 below, numbered automatically    OK
+figure   group of three   3 panels, (a)(b)(c), per-panel captions, one group caption  OK
+REF      [[表1-1]]        became a field; with no {\field} viewer the fallback text shows  OK
+```
+
+`pnpm check`: 177 tests, all passing.

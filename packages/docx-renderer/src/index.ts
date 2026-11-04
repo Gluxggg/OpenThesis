@@ -39,6 +39,7 @@ import type {
   LegacyDocumentJSON,
   SpacerBlock,
   BorderSpec,
+  FigureItem,
   OpenThesisDocument,
   HeadingBlock,
   ParagraphBlock,
@@ -887,11 +888,16 @@ function renderTable(
       : fallback;
   const BO = toBorder(declared?.top, { style: BorderStyle.SINGLE, size: 12, color: '000000' });
   const BI = toBorder(declared?.insideH, { style: BorderStyle.SINGLE, size: 6, color: '000000' });
-  const BLeft = toBorder(declared?.left, { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' });
-  const BRight = toBorder(declared?.right, { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' });
+  const BLeft = toBorder(declared?.left, { style: BorderStyle.SINGLE, size: 2, color: 'FFFFFF' });
+  const BRight = toBorder(declared?.right, { style: BorderStyle.SINGLE, size: 2, color: 'FFFFFF' });
   const BBottom = toBorder(declared?.bottom, BO);
-  const BInsideV = toBorder(declared?.insideV, { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' });
-  const NO = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+  const BInsideV = toBorder(declared?.insideV, { style: BorderStyle.SINGLE, size: 2, color: 'FFFFFF' });
+  // `nil` is the spec-correct value for "no border" and Word honours it, but
+  // LibreOffice — and any viewer built on it, including WPS — falls back to its
+  // default table grid instead, which ruled every row and column of a three-line
+  // table. A white hairline draws nothing on paper and is honoured everywhere.
+  // Verified by rendering one table three ways and comparing the images.
+  const NO = { style: BorderStyle.SINGLE, size: 2, color: 'FFFFFF' };
 
   // When the template draws a full grid, that is the format — the academic
   // three-line default only applies to a template that did not say otherwise.
@@ -1132,12 +1138,136 @@ function detectImageType(buffer: Buffer): 'png' | 'jpg' | 'gif' | 'bmp' | null {
   return null;
 }
 
+/**
+ * One panel image, sized to fit the cell it sits in.
+ *
+ * A missing or unreadable file still produces a paragraph, so the panel keeps its
+ * label and the layout keeps its shape instead of collapsing.
+ */
+function panelImage(item: FigureItem, contentDir: string | undefined, maxWidthPx: number): Paragraph {
+  let imgPath = item.path;
+  if (contentDir && !isAbsolute(imgPath)) imgPath = resolve(contentDir, imgPath);
+
+  let width = item.width;
+  let height = item.height;
+  if (existsSync(imgPath)) {
+    try {
+      const buffer = readFileSync(imgPath);
+      const size = getImageSize(buffer);
+      if (size && size.width > 0 && size.height > 0) {
+        const ratio = size.width / size.height;
+        if (!width && !height) { width = Math.min(size.width, maxWidthPx); height = width / ratio; }
+        else if (width && !height) height = width / ratio;
+        else if (!width && height) width = height * ratio;
+      } else {
+        width = width || Math.min(300, maxWidthPx);
+        height = height || 200;
+      }
+      if (width! > maxWidthPx) { const shrink = maxWidthPx / width!; width = maxWidthPx; height = height! * shrink; }
+      return new Paragraph({
+        children: [new ImageRun({ data: buffer, transformation: { width: width!, height: height! }, type: detectImageType(buffer) ?? 'png' })],
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 40, after: 40 },
+      });
+    } catch {
+      // fall through to the placeholder
+    }
+  }
+  return new Paragraph({
+    children: [new TextRun({ text: `[未找到图片: ${item.path}]`, size: 18, italics: true })],
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 40, after: 40 },
+  });
+}
+
+/**
+ * A group figure — 图1(a), (b), (c) — laid out as a borderless table.
+ *
+ * The layout table is how Word itself does side-by-side panels, and it keeps the
+ * labels aligned under their images. The group is numbered once; the letters
+ * label the panels.
+ */
+function renderFigureGroup(
+  template: DocumentTemplate,
+  block: FigureBlock,
+  contentDir?: string,
+  docType?: string,
+): (Paragraph | Table)[] {
+  const captionStyle = resolveStyle(template, 'figure_caption', docType);
+  const captionSpacing = lineStyle(captionStyle, 312);
+  const page = template.page;
+  const printableTwips = Math.max(1200, (page?.width ?? 11906) - (page?.margins?.left ?? 0) - (page?.margins?.right ?? 0));
+
+  const items = block.items ?? [];
+  const columns = Math.max(1, Math.min(block.columns ?? items.length, items.length));
+  const cellTwips = Math.floor(printableTwips / columns);
+  const maxWidthPx = Math.floor(cellTwips / 15);
+  const noBorder = { top: NO_BORDER, bottom: NO_BORDER, left: NO_BORDER, right: NO_BORDER };
+
+  const rows: TableRow[] = [];
+  for (let start = 0; start < items.length; start += columns) {
+    const slice = items.slice(start, start + columns);
+    rows.push(new TableRow({
+      children: Array.from({ length: columns }, (_, column) => {
+        const item = slice[column];
+        const children: Paragraph[] = [];
+        if (item) {
+          children.push(panelImage(item, contentDir, maxWidthPx));
+          const label = item.label ?? `(${String.fromCharCode(97 + start + column)})`;
+          children.push(new Paragraph({
+            children: styledRuns(label, captionStyle),
+            alignment: AlignmentType.CENTER,
+            spacing: { before: 0, after: item.caption ? 0 : 60 },
+          }));
+          if (item.caption) {
+            children.push(new Paragraph({
+              children: styledRuns(item.caption, captionStyle),
+              alignment: AlignmentType.CENTER,
+              spacing: { before: 0, after: 60 },
+            }));
+          }
+        }
+        return new TableCell({ width: { size: cellTwips, type: WidthType.DXA }, borders: noBorder, children });
+      }),
+    }));
+  }
+
+  const table = new Table({
+    width: { size: cellTwips * columns, type: WidthType.DXA },
+    borders: { ...noBorder, insideHorizontal: NO_BORDER, insideVertical: NO_BORDER },
+    rows,
+  });
+
+  // The group caption, numbered once and bookmarked like any other.
+  const caption = new Paragraph({
+    children: [
+      ...(block.number
+        ? [
+            captionBookmarkStart(block.number, nextBookmarkId()),
+            styledRun(block.number, captionStyle),
+            captionBookmarkEnd(bookmarkCounter),
+            styledRun(captionText(block.number, block.caption).slice(block.number.length), captionStyle),
+          ]
+        : styledRuns(captionText(block.number, block.caption), captionStyle)),
+    ],
+    alignment: mapAlignment(captionStyle.paragraph.alignment),
+    spacing: { before: captionStyle.paragraph.spaceBefore, after: captionStyle.paragraph.spaceAfter, ...captionSpacing },
+  });
+
+  return [table, caption];
+}
+
 function renderFigure(
   template: DocumentTemplate,
   block: FigureBlock,
   contentDir?: string,
   docType?: string,
-): Paragraph[] {
+): (Paragraph | Table)[] {
+  if (block.items && block.items.length > 0) {
+    return renderFigureGroup(template, block, contentDir, docType);
+  }
+  // A figure with neither panels nor a path has nothing to draw.
+  if (!block.path) return [];
   const ext = extname(block.path).toLowerCase();
   let type: 'png' | 'jpg' | 'gif' | 'bmp' = 'png';
   if (ext === '.jpg' || ext === '.jpeg') type = 'jpg';
@@ -3103,6 +3233,15 @@ function numberCaptionsInDocument(doc: OpenThesisDocument): void {
   numberCaptions((doc as { body?: NumberedBlock[] }).body ?? [], 0, counters);
 }
 
+
+/**
+ * The border value that draws nothing.
+ *
+ * `nil` is spec-correct and Word honours it, but LibreOffice — and viewers built
+ * on it — falls back to its default table grid, ruling every row and column of a
+ * three-line table. A white hairline draws nothing on paper and works everywhere.
+ */
+const NO_BORDER = { style: BorderStyle.SINGLE, size: 2, color: 'FFFFFF' };
 
 // ── Utility ───────────────────────────────────────────────
 

@@ -412,10 +412,41 @@ export interface EquationBlock extends BaseBlock {
   latex: string; number?: string;
 }
 
+/**
+ * One panel of a figure: a single image and its own label — 图1(a), 图1(b).
+ *
+ * A group figure is the common academic shape for an experiment compared across
+ * cases: several images side by side under one caption, each labelled (a), (b).
+ * The whole group is numbered once; the letters label the panels.
+ */
+export interface FigureItem {
+  /** Relative to the content file, like `FigureBlock.path`. */
+  path: string;
+  /** `(a)`, or whatever the panel is called. Defaults to `(a)`, `(b)`, … */
+  label?: string;
+  /** A line under the panel, when one is wanted at all. */
+  caption?: string;
+  /** Overrides, in CSS pixels, same unit as `FigureBlock.width`. */
+  width?: number;
+  height?: number;
+}
+
 export interface FigureBlock extends BaseBlock {
   type: 'figure';
-  path: string; caption: string; number?: string;
-  width?: number; height?: number;
+  /** A single image. Omitted when `items` is used instead. */
+  path?: string;
+  caption: string;
+  number?: string;
+  width?: number;
+  height?: number;
+  /**
+   * Panels of a group figure, laid out side by side in one borderless table.
+   *
+   * When present, `path` is ignored — the group's images are the items.
+   */
+  items?: FigureItem[];
+  /** How many panels per row. Defaults to all of them in one row. */
+  columns?: number;
 }
 
 export interface TableBlock extends BaseBlock {

@@ -856,10 +856,19 @@ test('academic tables default to standard 三线表 (three-line tables)', async 
 
   // Table borders: top 1.5pt (12), bottom 1.5pt (12), no left/right/inside verticals
   assert.match(xml, /<w:tblBorders><w:top w:val="single" w:color="000000" w:sz="12"\/>/);
-  assert.match(xml, /<w:left w:val="none" w:color="FFFFFF" w:sz="0"\/>/);
+  // An absent rule is a white hairline: nil/none make LibreOffice draw its
+  // default grid instead of nothing.
+  assert.match(xml, /<w:left w:val="single" w:color="FFFFFF" w:sz="2"\/>/);
+  assert.match(xml, /<w:insideV w:val="single" w:color="FFFFFF" w:sz="2"\/>/);
   assert.match(xml, /<w:bottom w:val="single" w:color="000000" w:sz="12"\/>/);
-  assert.match(xml, /<w:right w:val="none" w:color="FFFFFF" w:sz="0"\/>/);
-  assert.match(xml, /<w:insideV w:val="none" w:color="FFFFFF" w:sz="0"\/>/);
+  // An absent rule is a white hairline: nil/none make LibreOffice draw its
+  // default grid instead of nothing.
+  assert.match(xml, /<w:left w:val="single" w:color="FFFFFF" w:sz="2"\/>/);
+  assert.match(xml, /<w:insideV w:val="single" w:color="FFFFFF" w:sz="2"\/>/);
+  // An absent rule is a white hairline: nil/none make LibreOffice draw its
+  // default grid instead of nothing.
+  assert.match(xml, /<w:left w:val="single" w:color="FFFFFF" w:sz="2"\/>/);
+  assert.match(xml, /<w:insideV w:val="single" w:color="FFFFFF" w:sz="2"\/>/);
 
   // Header bottom border: 0.75pt (6)
   assert.match(xml, /<w:bottom w:val="single" w:color="000000" w:sz="6"\/>/);
@@ -1483,9 +1492,10 @@ test('a table takes its borders from the template that declares them', async () 
 
     assert.match(borders, new RegExp(`<w:top w:val="single" w:color="000000" w:sz="${want.top}"`), `${name}: top rule`);
     if (want.grid) {
-      assert.match(borders, /<w:insideV w:val="single"/, `${name}: expected a full grid`);
+      assert.match(borders, /<w:insideV w:val="single" w:color="000000"/, `${name}: expected a full grid`);
     } else {
-      assert.doesNotMatch(borders, /<w:insideV w:val="single"/, `${name}: expected no vertical rules`);
+      assert.doesNotMatch(borders, /<w:insideV w:val="single" w:color="000000"/, `${name}: expected no vertical rules`);
+      assert.match(borders, /<w:insideV w:val="single" w:color="FFFFFF"/, `${name}: missing rules are white hairlines`);
     }
   }
 });
@@ -1694,4 +1704,76 @@ test('a reference can name a block by id, which survives automatic numbering', a
   const target = xml.match(/<w:fldSimple w:instr=" REF ([^ \\"]+)/)?.[1];
   assert.ok(bookmark, 'expected the caption bookmark');
   assert.equal(target, bookmark, 'the field must point at that caption');
+});
+
+test('a group figure lays its panels out in a borderless table with (a), (b) labels', async () => {
+  // 图1(a), 图1(b): the common academic shape for one experiment compared across
+  // cases. Word itself lays these out in a table, which keeps the labels aligned
+  // under their images.
+  const contentDir = mkdtempSync(join(tmpdir(), 'openthesis-subfig-'));
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9Qz0AEYBxVSF+FAP5FDvcfRYWgAAAAAElFTkSuQmCC',
+    'base64',
+  );
+  writeFileSync(join(contentDir, 'a.png'), png);
+  writeFileSync(join(contentDir, 'b.png'), png);
+  writeFileSync(join(contentDir, 'c.png'), png);
+
+  const buffer = await renderDocument({
+    template,
+    contentDir,
+    document: {
+      type: 'thesis', meta: { title: 'Panels', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [{
+        type: 'figure', caption: '三种工况对比', number: '图1-1',
+        items: [
+          { path: 'a.png', caption: '工况一' },
+          { path: 'b.png', caption: '工况二' },
+          { path: 'c.png', caption: '工况三' },
+        ],
+      }] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+
+  // Three panels, three labels, one group caption.
+  assert.match(xml, /\(a\)/);
+  assert.match(xml, /\(b\)/);
+  assert.match(xml, /\(c\)/);
+  assert.match(xml, /工况一/);
+  assert.match(xml, /工况二/);
+  assert.match(xml, /工况三/);
+  assert.match(xml, /图1-1/);
+  assert.match(xml, /三种工况对比/);
+
+  // The layout table draws nothing itself.
+  const layoutTable = xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/)?.[0] ?? '';
+  assert.ok(layoutTable, 'expected a layout table');
+  assert.match(layoutTable, /<w:tblBorders>/);
+  assert.doesNotMatch(layoutTable, /w:color="000000"/, 'the layout table must draw no visible rule');
+});
+
+test('a group figure numbers once and can be referenced by that number', async () => {
+  const contentDir = mkdtempSync(join(tmpdir(), 'openthesis-subfig2-'));
+  writeFileSync(
+    join(contentDir, 'a.png'),
+    Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9Qz0AEYBxVSF+FAP5FDvcfRYWgAAAAAElFTkSuQmCC', 'base64'),
+  );
+
+  const buffer = await renderDocument({
+    template,
+    contentDir,
+    document: {
+      type: 'thesis', meta: { title: 'One number', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'paragraph', text: '如图1-1(a)所示。' },
+        { type: 'figure', caption: '面板', items: [{ path: 'a.png', label: '(a)' }] },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  // Exactly one number for the group, and the panel label is not a second number.
+  const numbers = [...xml.matchAll(/图1-1/g)].length;
+  assert.ok(numbers >= 1);
+  assert.equal((xml.match(/_Ref图11/g) ?? []).length >= 1, true, 'the group caption should be bookmarked');
 });
