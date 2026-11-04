@@ -2074,3 +2074,92 @@ test('a hand-written cover still wins over the generated one', async () => {
   assert.match(xml, /\u624b\u5199\u5c01\u9762\u884c/);
   assert.doesNotMatch(xml, /\u5143\u6570\u636e\u9898\u76ee<\/w:t>/, 'the generated cover must not be added too');
 });
+
+// ── Equations: OMML bodies, numbering, references ──────────
+
+test('a n-ary operator carries its operand instead of an empty body', async () => {
+  // `\int_0^\infty f dx` is one object. Parsing the operator and its operand as
+  // siblings left `<m:e/>` empty, and every viewer prints an empty n-ary body as
+  // a placeholder box — the stray □ that sat in the middle of the integral.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Nary', degree: 'master', date: '2026', omitCover: true }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'equation', latex: '\\int_{0}^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}' },
+        { type: 'equation', latex: '\\sum_{i=1}^{n} \\alpha_i x_i^2 + \\beta' },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+
+  // An empty body is written as a self-closing <m:e/>.
+  const naryBodies = [...xml.matchAll(/<m:e>([\s\S]*?)<\/m:e>/g)].map(m => m[1].trim());
+  assert.ok(naryBodies.length > 0, 'expected n-ary bodies');
+  const emptyOnes = [...xml.matchAll(/<m:nary>[\s\S]*?<\/m:nary>/g)]
+    .filter(m => /<m:e\/>/.test(m[0]));
+  assert.equal(emptyOnes.length, 0, 'no n-ary may have an empty body');
+  assert.match(xml, /<m:nary>/, 'the integral should still be an n-ary');
+});
+
+test('equations are numbered (chapter-sequence) automatically', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'EqNum', degree: 'master', date: '2026', omitCover: true }, cover: [],
+      sections: [
+        { id: 'c1', type: 'chapter', title: '第一章', content: [
+          { type: 'equation_numbered', latex: 'a = b' },
+          { type: 'equation_numbered', latex: 'c = d' },
+        ] },
+        { id: 'c2', type: 'chapter', title: '第二章', content: [
+          { type: 'equation_numbered', latex: 'e = f' },
+        ] },
+      ],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /\(1-1\)/);
+  assert.match(xml, /\(1-2\)/);
+  assert.match(xml, /\(2-1\)/, 'the sequence restarts in the next chapter');
+});
+
+test('an equation number written by the author is kept', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'EqKeep', degree: 'master', date: '2026', omitCover: true }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'equation_numbered', latex: 'a = b', number: 'A-1' },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /\(A-1\)/);
+});
+
+test('a [[式1-1]] in the body becomes a REF field printing (1-1)', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'EqRef', degree: 'master', date: '2026', omitCover: true }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'paragraph', text: '如[[式1-1]]所示。' },
+        { type: 'equation_numbered', latex: 'a = b' },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+
+  const bibliographic = xml.includes('[[式1-1]]');
+  assert.equal(bibliographic, false, 'the marker must not survive as text');
+
+  const ref = fieldInstrs(xml).find(i => i.startsWith('REF'));
+  assert.ok(ref, `expected a REF field, got ${JSON.stringify(fieldInstrs(xml))}`);
+  const target = /REF\s+(\S+)/.exec(ref)?.[1];
+  assert.match(target ?? '', /^_Ref/, 'the field points at a caption-style bookmark');
+
+  // The field's result is the printed form, with the parentheses.
+  const result = /<w:fldChar w:fldCharType="separate"[\s\S]{0,24}?<w:t[^>]*>([^<]*)<\/w:t>/.exec(xml)?.[1];
+  assert.equal(result, '(1-1)');
+});

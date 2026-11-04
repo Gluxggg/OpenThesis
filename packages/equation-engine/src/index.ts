@@ -19,8 +19,8 @@ export type LatexMathNode =
   | { type: 'fraction'; numerator: LatexMathNode[]; denominator: LatexMathNode[]; bar?: boolean }
   | { type: 'radical'; children: LatexMathNode[]; degree?: LatexMathNode[] }
   | { type: 'script'; base: LatexMathNode[]; subScript?: LatexMathNode[]; superScript?: LatexMathNode[] }
-  | { type: 'sum' | 'integral'; subScript?: LatexMathNode[]; superScript?: LatexMathNode[] }
-  | { type: 'nary'; operator: string; subScript?: LatexMathNode[]; superScript?: LatexMathNode[] }
+  | { type: 'sum' | 'integral'; subScript?: LatexMathNode[]; superScript?: LatexMathNode[]; body?: LatexMathNode[] }
+  | { type: 'nary'; operator: string; subScript?: LatexMathNode[]; superScript?: LatexMathNode[]; body?: LatexMathNode[] }
   | { type: 'accent'; accent: string; children: LatexMathNode[] }
   | { type: 'bar'; position: 'top' | 'bottom'; children: LatexMathNode[] }
   | { type: 'delimiter'; opening: string; closing: string; children: LatexMathNode[] }
@@ -288,6 +288,44 @@ export function renderEquation(latex: string): string {
 
 // ── Native math AST ──────────────────────────────────────
 
+/**
+ * Text that ends an operator's operand: everything up to a relation belongs to
+ * the operator, and the relation starts a new term.
+ */
+const OPERAND_STOP = new Set(['=', '+', '-', '<', '>', '≤', '≥', '≈', '≠', ',', ';']);
+
+/**
+ * Give every n-ary operator the expression it applies to.
+ *
+ * `\int_0^\infty f dx` is one object: the operator plus its operand. Parsing it
+ * as two siblings left the operator's body empty, and a viewer prints an empty
+ * n-ary body as a placeholder box - which is what a stray □ in the middle of the
+ * integral was.
+ */
+function absorbOperands(nodes: LatexMathNode[]): LatexMathNode[] {
+  const out: LatexMathNode[] = [];
+  for (let i = 0; i < nodes.length; i += 1) {
+    const node = nodes[i];
+    if ((node.type === 'sum' || node.type === 'integral' || node.type === 'nary') && !node.body) {
+      const body: LatexMathNode[] = [];
+      let j = i + 1;
+      while (j < nodes.length) {
+        const next = nodes[j];
+        if (next.type === 'run' && OPERAND_STOP.has(next.text.trim())) break;
+        body.push(next);
+        j += 1;
+      }
+      if (body.length > 0) {
+        out.push({ ...node, body });
+        i = j - 1;
+        continue;
+      }
+    }
+    out.push(node);
+  }
+  return out;
+}
+
 class LatexMathParser {
   private index = 0;
 
@@ -325,7 +363,7 @@ class LatexMathParser {
         for (const node of atom) appendMathNode(nodes, node);
       }
     }
-    return nodes;
+    return absorbOperands(nodes);
   }
 
   private parseAtom(): LatexMathNode[] {
