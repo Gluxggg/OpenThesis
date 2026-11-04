@@ -753,3 +753,62 @@ fills them in when fields update, and the entry text is right either way.
 ```
 
 `pnpm check`: 186 tests, all passing.
+
+---
+
+## 18. 符号说明 and the cover the renderer can build itself
+
+Two things the guide asks for that had no implementation at all.
+
+### 符号说明
+
+A `nomenclature` section type, and the section carries its symbols rather than a
+hand-built table:
+
+```json
+{ "type": "nomenclature", "title": "符号说明", "content": [],
+  "symbols": [
+    { "symbol": "E", "meaning": "弹性模量", "unit": "GPa" },
+    { "symbol": "ν", "meaning": "泊松比" }
+  ] }
+```
+
+The symbols are content; the table is layout. The renderer picks two columns or
+three (adding 单位 only when some row has one), applies the same three-line table
+styling as every other table, and puts the page in the front matter. A section of
+this type with no `symbols` falls back to its ordinary `content` blocks.
+
+### The cover
+
+Every field of a cover was already in `meta` — title, English title, author,
+supervisor, department, major, date, classification number — so a thesis that left
+`cover` empty was losing the page for no reason. It is generated now, using the
+template's own three cover styles:
+
+| Tier | Style | Guide |
+|---|---|---|
+| 学校 + 学位 | `cover_line` | 四号 加粗 居中 |
+| 中英文题目 | `cover_title` | 小二 加粗 居中 |
+| 研究生 / 指导教师 / 培养学院 / 专业 / 日期 | `cover_line` | 四号 加粗 居中 |
+| 中图分类号 | `cover_meta` | 五号 居左 |
+
+Two things this got wrong first, both caught by looking at the page:
+
+- The metadata rows were `cover_meta`, which is the **五号 justified** style meant
+  for 中图分类号. The guide's rows are 四号 bold centred, so they are `cover_line`.
+- The cover is now produced for every document with an empty `cover`, which used
+  to mean "no cover". `meta.omitCover: true` restores that meaning, and a
+  hand-written `cover` still wins.
+
+### Verified by rendering
+
+```
+cover        学校+学位 / 中英文题目 / 五行中心信息 / 中图分类号   correct tiers and fonts
+符号说明   heading + 符号 | 含义 | 单位 三线表, E / ν / σ / ε          correct
+目录       符号说明 listed, all entries at level 1               fixed: levels follow depth, not type
+```
+
+That last row was a real bug: entries were levelled by section *type*, so 摘要 and
+符号说明 were indented as if they sat under something. Levels follow nesting depth now.
+
+`pnpm check`: 191 tests, all passing.
