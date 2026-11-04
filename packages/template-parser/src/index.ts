@@ -501,40 +501,42 @@ function breakStyleCycles(
  * overrides. We recursively merge all inherited properties.
  */
 function resolveStyleInheritance(raw: Record<string, RawStyle>): Record<string, RawStyle> {
-  const resolved: Record<string, RawStyle> = {};
   const defaults = raw['_defaults'];
+  const resolved: Record<string, RawStyle> = {};
 
-  for (const [id, style] of Object.entries(raw)) {
+  // Memoised: a `basedOn` chain used to be walked from scratch for every style
+  // that inherited it, so a template whose whole style table hangs off `Normal`
+  // re-merged that chain n times — O(styles × depth) property-bag spreads. Each
+  // style resolves once and its descendants reuse the result.
+  const cache = new Map<string, RawStyle>();
+  // Path-local, so a loop is cut rather than mistaken for a cache hit. Cycles are
+  // already broken by `breakStyleCycles`; this is the belt-and-braces guard.
+  const resolving = new Set<string>();
+
+  const resolveOne = (id: string): RawStyle => {
+    const cached = cache.get(id);
+    if (cached) return cached;
+    const style = raw[id];
+    if (!style) return style;
+    if (resolving.has(id)) return style;
+
+    resolving.add(id);
+    const parent = style.basedOn ? raw[style.basedOn] : undefined;
+    const result = !style.basedOn || !parent
+      ? (defaults ? mergeStyles(defaults, style) : style)
+      : mergeStyles(resolveOne(style.basedOn), style);
+    resolving.delete(id);
+
+    cache.set(id, result);
+    return result;
+  };
+
+  for (const id of Object.keys(raw)) {
     if (id === '_defaults') continue;
-    resolved[id] = resolveSingleStyle(id, style, raw, new Set(), defaults);
+    resolved[id] = resolveOne(id);
   }
 
   return resolved;
-}
-
-function resolveSingleStyle(
-  id: string,
-  style: RawStyle,
-  all: Record<string, RawStyle>,
-  visited: Set<string>,
-  defaults?: RawStyle,
-): RawStyle {
-  // Prevent infinite loops
-  if (visited.has(id)) return style;
-  visited.add(id);
-
-  // No inheritance
-  if (!style.basedOn || !all[style.basedOn]) {
-    // Apply defaults at the bottom of the chain
-    if (defaults) {
-      return mergeStyles(defaults, style);
-    }
-    return style;
-  }
-
-  // Recursively resolve parent
-  const parent = resolveSingleStyle(style.basedOn, all[style.basedOn], all, visited, defaults);
-  return mergeStyles(parent, style);
 }
 
 function mergeStyles(base: RawStyle, override: RawStyle): RawStyle {
@@ -1240,20 +1242,6 @@ function countStyleUsageFromTree(document?: unknown): Map<string, number> {
   return usage;
 }
 
-/**
- * How often each paragraph style is applied in a `document.xml`, given its text.
- *
- * The public entry point. It keeps its `string` signature so existing callers
- * do not break, and normalises the prefix before parsing so it is correct on a
- * document that binds another one. `parseTemplate` does not call this — it
- * hands the tree it has already parsed to `countStyleUsageFromTree` rather than
- * paying for a second parse of a multi-megabyte part.
- */
-function countStyleUsage(docXml?: string): Map<string, number> {
-  if (!docXml) return new Map();
-  return countStyleUsageFromTree(createParser().parse(normalizeWordPrefix(docXml)));
-}
-
 /** Every node stored under one tag in a parsed part, in document order. */
 function collectTagNodes(node: unknown, tag: string, out: unknown[] = []): unknown[] {
   if (!node || typeof node !== 'object') return out;
@@ -1306,5 +1294,10 @@ function pickRoleWinners(
 
 // ── Utility Exports ───────────────────────────────────────
 
-export { extractRawStyles, resolveStyleInheritance, detectStyleRoles, countStyleUsage, pickRoleWinners };
+// Public surface: `parseTemplate` (defined above) and `parsePdfTemplate` (below).
+// `extractRawStyles`, `resolveStyleInheritance`, `detectStyleRoles`,
+// `countStyleUsageFromTree` and `pickRoleWinners` are implementation detail — they
+// were exported, but their signatures name `RawStyle` / `RawParagraphProps`, which
+// are not exported, so no external caller could even write the parameter type.
+// Nothing in this repository imports them.
 export { parsePdfTemplate } from './pdf.js';

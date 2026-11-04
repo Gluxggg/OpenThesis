@@ -1238,3 +1238,60 @@ test('a journal front matter resolves through the template instead of hardcoded 
   const lastSize = [...xml.slice(0, at).matchAll(/<w:sz w:val="(\d+)"\/>/g)].pop();
   assert.equal(Number(lastSize?.[1]), 41, 'the title should carry the template role size');
 });
+
+test('the font guard leaves fonts the template declares alone', async () => {
+  // The guard used to strip every `*Theme` attribute and rewrite every Latin
+  // `w:eastAsia` to 仿宋 across styles.xml and document.xml. Harmless for a
+  // template that says nothing, hostile to one that says exactly what it wants.
+  // It is now limited to `w:docDefaults`, where the library bug actually lives.
+  const tpl = structuredClone(template);
+  tpl.styles.TOC1.font.eastAsia = 'Arial';
+  tpl.styles.TOC1.font.size = 24;
+
+  const buffer = await renderDocument({
+    template: tpl,
+    document: {
+      type: 'thesis', meta: { title: 'Fonts' }, cover: [],
+      sections: [
+        { id: 'toc', type: 'toc', title: '目录', content: [] },
+        { id: 'c1', type: 'chapter', title: 'Chapter', content: [{ type: 'paragraph', text: '正文' }] },
+      ],
+    },
+  });
+  const zip = await JSZip.loadAsync(buffer);
+  const stylesXml = await zip.file('word/styles.xml').async('string');
+  const toc1 = stylesXml.match(/<w:style[^>]*w:styleId="TOC1"[\s\S]*?<\/w:style>/)?.[0];
+  assert.ok(toc1, 'expected a TOC1 style');
+  // Arial is what the template asked for; the guard must not turn it into 仿宋.
+  assert.match(toc1, /w:eastAsia="Arial"/);
+});
+
+test('a table row with the wrong cell count warns instead of padding in silence', async () => {
+  // `validateDocument` reports the mismatch, but a caller using the renderer
+  // directly got a silently padded or truncated row.
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    await renderDocument({
+      template,
+      document: {
+        type: 'thesis', meta: { title: 'Rows' }, cover: [],
+        sections: [{
+          id: 'c1', type: 'chapter', title: 'Chapter',
+          content: [{
+            type: 'table', caption: '短行', headers: ['A', 'B'],
+            data: [['only one'], ['1', '2', 'extra']],
+          }],
+        }],
+      },
+    });
+  } finally {
+    console.warn = original;
+  }
+
+  const short = warnings.find(w => w.includes('row 1') && w.includes('Missing cells'));
+  const long = warnings.find(w => w.includes('row 2') && w.includes('Extra cells'));
+  assert.ok(short, `expected a missing-cells warning, got: ${JSON.stringify(warnings)}`);
+  assert.ok(long, `expected a dropped-cells warning, got: ${JSON.stringify(warnings)}`);
+});

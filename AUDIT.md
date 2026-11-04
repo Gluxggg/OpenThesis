@@ -372,3 +372,21 @@ matter that was still hardcoded.
 | F-4 | The journal front matter (title, authors, affiliations, abstract, keywords) was built from literal font, size and spacing values — seven `font: { ascii: … }` literals and zero `resolveStyle` calls — while the body already went through the template. | — | Fixed — five roles added to `StyleRole` (`journal_title`, `journal_author`, `journal_affiliation`, `journal_abstract`, `journal_keywords`) with fallbacks in the renderer, and every front-matter paragraph now resolves through `resolveStyle` |
 
 `pnpm check`: 150 tests, all passing.
+
+---
+
+## 9. Code-quality round
+
+The structural items left after §6–§8. No behaviour change to any document, but
+the parser gets faster and its public surface stops advertising things it cannot
+support.
+
+| # | Finding | Evidence | Status |
+|---|---|---|---|
+| H-1 | `resolveStyleInheritance` walked the whole `basedOn` chain from scratch for every inheriting style — O(styles × depth) property-bag spreads, and the shipped template hangs almost every style off `Normal`. | — | Fixed — each style resolves once and its descendants reuse the result (`Map` cache, plus a path-local `resolving` set so a loop is still cut rather than mistaken for a hit) |
+| H-2 | Five internal helpers were re-exported, but their signatures name `RawStyle` / `RawParagraphProps`, which are not exported — no external caller could write the parameter type, and nothing in the repository imported them. `countStyleUsage` also carried a public `string` signature that nothing called. | `dist/index.d.ts` declared `RawStyle` without exporting it | Fixed — the package exports `parseTemplate` and `parsePdfTemplate` only; `countStyleUsage`'s string entry point is gone (its tree-based form stays internal) |
+| H-3 | The Chinese-font guard stripped **every** `w:*Theme` attribute and rewrote **every** Latin `w:eastAsia` to 仿宋, in styles.xml *and* document.xml. Harmless for a template that says nothing, hostile to one that says exactly what it wants. | — | Fixed — scoped to `w:docDefaults`, where the library bug actually is |
+| H-4 | **The guard is inert with docx 9.7.1.** The emitted part is `<w:docDefaults><w:rPrDefault/><w:pPrDefault/></w:docDefaults>` — no `rFonts` at all, because the renderer never asks the library for a default document run. | inspected the emitted `styles.xml` | Recorded rather than removed — the symptom it addresses was real and a library bump could reintroduce it, and staying narrow costs nothing. The comment now says so instead of implying an active fix |
+| H-5 | A table row with the wrong cell count was padded or truncated with no word to the caller. `validateDocument` reports it, but a caller using the renderer directly does not necessarily run the validator. | `styledRuns(row[ci] ?? '', bodyStyle)` | Fixed — the renderer warns which row, how many cells it has, and whether cells were added empty or dropped |
+
+`pnpm check`: 154 tests, all passing.

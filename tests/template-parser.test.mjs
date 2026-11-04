@@ -596,3 +596,36 @@ test('reads w:docGrid from the section properties', async () => {
   const template = await parseTemplate(await zip.generateAsync({ type: 'nodebuffer' }), { documentType: 'thesis' });
   assert.deepEqual(template.page.docGrid, { type: 'linesAndChars', linePitch: 312, charSpace: 0 });
 });
+
+test('the parser package exposes only its two entry points', async () => {
+  // Five internal helpers used to be re-exported, but their signatures name
+  // `RawStyle` / `RawParagraphProps`, which are not exported — an external caller
+  // could not even write the parameter type, and nothing in this repository
+  // imported them.
+  const parser = await import('../packages/template-parser/dist/index.js');
+  assert.deepEqual(Object.keys(parser).sort(), ['parsePdfTemplate', 'parseTemplate']);
+});
+
+test('a long basedOn chain still resolves every inherited property', async () => {
+  // The chain used to be walked from scratch for every inheriting style. It is
+  // now memoised; this pins that the shared result is still correct — the root
+  // contributes its font, each link contributes its own override, and the leaf
+  // carries both.
+  const styles = ['<w:style w:type="paragraph" w:default="1" w:styleId="s0"><w:name w:val="Normal"/><w:rPr><w:sz w:val="24"/><w:rFonts w:eastAsia="宋体"/></w:rPr></w:style>'];
+  for (let i = 1; i < 40; i++) {
+    styles.push(
+      `<w:style w:type="paragraph" w:styleId="s${i}"><w:name w:val="S${i}"/><w:basedOn w:val="s${i - 1}"/>`
+      + `<w:rPr><w:b/></w:rPr><w:pPr><w:ind w:left="${i * 10}"/></w:pPr></w:style>`,
+    );
+  }
+  const zip = new JSZip();
+  zip.file('word/styles.xml', `<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${styles.join('')}</w:styles>`);
+  zip.file('word/document.xml', `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>`);
+
+  const template = await parseTemplate(await zip.generateAsync({ type: 'nodebuffer' }), { documentType: 'thesis' });
+  const leaf = template.styles['s39'];
+  assert.equal(leaf.font.size, 24, 'root font size reaches the leaf');
+  assert.equal(leaf.font.eastAsia, '宋体', 'root eastAsia reaches the leaf');
+  assert.equal(leaf.font.bold, true, 'the leaf own override applies');
+  assert.equal(leaf.paragraph.leftIndent, 390, 'the nearest indent wins');
+});
