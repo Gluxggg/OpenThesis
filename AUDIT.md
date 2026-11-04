@@ -850,3 +850,55 @@ apart now.
   render as native OMML.
 
 `pnpm check`: 195 tests, all passing.
+
+---
+
+## 20. 参考文献 to GB/T 7714-2015, and citations in the body
+
+The reference list was a `text` blob the author had to punctuate by hand, and a
+citation marker did not exist at all. Both are the generator's job.
+
+### The entry model
+
+`Reference` now carries the parts the standard names, and `references.ts` assembles
+them:
+
+```json
+{ "id": "r1", "type": "journal", "language": "zh",
+  "authors": ["张三", "李四"], "title": "一种方法", "container": "计算机学报",
+  "year": 2024, "volume": "47", "issue": "3", "pages": "1-10" }
+```
+
+```
+张三, 李四. 一种方法[J]. 计算机学报, 2024, 47(3): 1-10.
+```
+
+`text` stays as the escape hatch: an entry the author wrote is printed verbatim.
+
+### What the formatter decides
+
+| Rule | Handled |
+|---|---|
+| 文献类型标志 | `[M]` `[J]` `[C]` `[D]` `[S]` `[P]` `[R]` `[N]` `[EB/OL]` `[DB/OL]` `[CP/DK]` `[A]` `[Z]` |
+| 主要责任者截断 | 3 or fewer listed; more become `张三, 李四, 王五, 等` or `SMITH J, BROWN A, LEE K, et al` |
+| 期刊尾部 | `年, 卷(期): 页码` |
+| 出版项 | `出版地: 出版者, 年` |
+| 析出文献 | `题名[C]//论文集题名. 出版地: 出版者, 年: 页码` |
+| 在线资源 | `题名[EB/OL]. (更新日期)[引用日期]. 访问路径` |
+| 标点 | one full stop between elements, one at the end; a element that already ends in a mark does not gain a second |
+
+### Citations
+
+`[[引用#r1]]` renders as a superscript `[1]`, `[[引用#r1,r2,r3]]` as `[1-3]` (a
+run of three or more becomes a range; two stay listed, because `[1-2]` is no
+shorter than `[1,2]`). The number is the entry's position in 参考文献, so the list
+is indexed before the body is rendered. An id that matches nothing warns and the
+marker is left as text rather than printing a number that points nowhere.
+
+### Reference entries get a hanging indent
+
+The template's `reference_item` style declares none, so a wrapped entry went back to
+the margin. It now indents two characters with a matching hanging indent, unless the
+template declares its own.
+
+`pnpm check`: 205 tests, all passing.

@@ -2163,3 +2163,136 @@ test('a [[式1-1]] in the body becomes a REF field printing (1-1)', async () => 
   const result = /<w:fldChar w:fldCharType="separate"[\s\S]{0,24}?<w:t[^>]*>([^<]*)<\/w:t>/.exec(xml)?.[1];
   assert.equal(result, '(1-1)');
 });
+
+// ── GB/T 7714-2015 references and citations ───────────────
+
+/** Render a thesis whose only body is one reference list, and read the entries. */
+async function renderReferences(references, sections) {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis',
+      meta: { title: 'Refs', degree: 'master', date: '2026', omitCover: true },
+      cover: [],
+      sections: sections ?? [{ id: 'c1', type: 'chapter', title: 'C', content: [{ type: 'paragraph', text: 'x' }] }],
+      backMatter: { references },
+    },
+  });
+  return documentXml(buffer);
+}
+
+/** The printed text of every reference entry, in order. */
+function referenceLines(xml) {
+  return [...xml.matchAll(/<w:t[^>]*>(\[\d+\][^<]*)<\/w:t>/g)].map(m => m[1]);
+}
+
+test('a journal article is set out per GB/T 7714-2015', async () => {
+  const { xml } = await renderReferences([{
+    id: 'r1', type: 'journal', language: 'zh',
+    authors: ['张三', '李四'], title: '一种方法', container: '计算机学报',
+    year: 2024, volume: '47', issue: '3', pages: '1-10',
+  }]);
+  const entry = referenceLines(xml)[0];
+  assert.equal(entry, '[1] 张三, 李四. 一种方法[J]. 计算机学报, 2024, 47(3): 1-10.');
+});
+
+test('a monograph is set out per GB/T 7714-2015', async () => {
+  const { xml } = await renderReferences([{
+    id: 'r1', type: 'book', language: 'zh',
+    authors: ['李明'], title: '文档工程学', place: '北京', publisher: '科学出版社',
+    year: 2022, pages: '45-67',
+  }]);
+  assert.equal(referenceLines(xml)[0], '[1] 李明. 文档工程学[M]. 北京: 科学出版社, 2022: 45-67.');
+});
+
+test('more than three authors are truncated with 等 or et al.', async () => {
+  const zh = await renderReferences([{
+    id: 'r1', type: 'journal', language: 'zh',
+    authors: ['张三', '李四', '王五', '赵六'], title: '题名', container: '刊名', year: 2024,
+  }]);
+  assert.equal(referenceLines(zh.xml)[0], '[1] 张三, 李四, 王五, 等. 题名[J]. 刊名, 2024.');
+
+  const en = await renderReferences([{
+    id: 'r1', type: 'journal', language: 'en',
+    authors: ['SMITH J', 'BROWN A', 'LEE K', 'KING R'], title: 'A title', container: 'A journal', year: 2023,
+  }]);
+  assert.equal(referenceLines(en.xml)[0], '[1] SMITH J, BROWN A, LEE K, et al. A title[J]. A journal, 2023.');
+});
+
+test('each document kind carries its own GB/T 7714 type marker', async () => {
+  const cases = [
+    [{ type: 'thesis', authors: ['陈静'], title: '研究', place: '北京', publisher: '北京科技大学', year: 2020 }, '研究[D]'],
+    [{ type: 'standard', authors: ['某委员会'], title: '规则', place: '北京', publisher: '中国标准出版社', year: 2015 }, '规则[S]'],
+    [{ type: 'conference', authors: ['王强'], title: '论文', container: '论文集', place: '上海', publisher: '出版社', year: 2021, pages: '88-95' }, '论文[C]//论文集'],
+    [{ type: 'report', authors: ['某机构'], title: '报告', place: '北京', publisher: '某出版社', year: 2019 }, '报告[R]'],
+  ];
+  for (const [reference, expected] of cases) {
+    const { xml } = await renderReferences([{ id: 'r1', language: 'zh', ...reference }]);
+    assert.ok(referenceLines(xml)[0].includes(expected), `expected ${expected}, got ${referenceLines(xml)[0]}`);
+  }
+});
+
+test('an online entry prints the access path after its dates', async () => {
+  const { xml } = await renderReferences([{
+    id: 'r1', type: 'electronic', language: 'zh', authors: ['某机构'],
+    title: '规范', year: 2024, accessDate: '2026-06-01', url: 'https://example.org/spec',
+  }]);
+  assert.equal(referenceLines(xml)[0], '[1] 某机构. 规范[EB/OL]. (2024)[2026-06-01]. https://example.org/spec.');
+});
+
+test('a fully written entry is printed as written', async () => {
+  const { xml } = await renderReferences([{ id: 'r1', text: '作者自己写的条目，保持原样。' }]);
+  assert.equal(referenceLines(xml)[0], '[1] 作者自己写的条目，保持原样。');
+});
+
+test('a reference entry carries a hanging indent', async () => {
+  // A wrapped entry aligns under its own text, not back at the margin.
+  const { xml } = await renderReferences([{
+    id: 'r1', type: 'journal', language: 'zh', authors: ['张三'], title: '一种方法',
+    container: '计算机学报', year: 2024, volume: '47', issue: '3', pages: '1-10',
+  }]);
+  const paragraph = /<w:p>(?:(?!<\/w:p>)[\s\S])*?\[1\][\s\S]*?<\/w:p>/.exec(xml)?.[0] ?? '';
+  const indent = /<w:ind[^>]*\/>/.exec(paragraph)?.[0] ?? '';
+  assert.match(indent, /w:hanging="\d+"/, `expected a hanging indent, got ${indent}`);
+});
+
+test('a [[引用#r1]] becomes a superscript number', async () => {
+  const { xml } = await renderReferences(
+    [{ id: 'r1', type: 'journal', language: 'zh', authors: ['张三'], title: '题名', container: '刊名', year: 2024 }],
+    [{ id: 'c1', type: 'chapter', title: 'C', content: [
+      { type: 'paragraph', text: '已有研究[[引用#r1]]。' },
+    ] }],
+  );
+  assert.doesNotMatch(xml, /\[\[引用#r1\]\]/, 'the marker must not survive as text');
+  // The citation is a superscript run carrying [1].
+  assert.match(xml, /<w:vertAlign w:val="superscript"\/>[\s\S]{0,200}?<w:t[^>]*>\[1\]<\/w:t>/);
+});
+
+test('consecutive citations collapse to a range', async () => {
+  const references = ['r1', 'r2', 'r3'].map((id, i) => ({
+    id, type: 'journal', language: 'zh', authors: ['张三'], title: `题名${i}`, container: '刊名', year: 2024,
+  }));
+  const { xml } = await renderReferences(references, [{ id: 'c1', type: 'chapter', title: 'C', content: [
+    { type: 'paragraph', text: '多个[[引用#r1,r2,r3]]。' },
+    { type: 'paragraph', text: '两个[[引用#r1,r2]]。' },
+  ] }]);
+  assert.match(xml, /<w:t[^>]*>\[1-3\]<\/w:t>/, 'three in a row become a range');
+  assert.match(xml, /<w:t[^>]*>\[1, 2\]<\/w:t>/, 'two stay listed');
+});
+
+test('a citation to an entry that does not exist warns and stays as text', async () => {
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  let xml;
+  try {
+    ({ xml } = await renderReferences(
+      [{ id: 'r1', type: 'journal', language: 'zh', authors: ['张三'], title: '题名', container: '刊名', year: 2024 }],
+      [{ id: 'c1', type: 'chapter', title: 'C', content: [{ type: 'paragraph', text: '见[[引用#nope]]。' }] }],
+    ));
+  } finally {
+    console.warn = original;
+  }
+  assert.match(xml, /\[\[引用#nope\]\]/);
+  assert.ok(warnings.some(w => w.includes('nope')), `expected a warning, got ${JSON.stringify(warnings)}`);
+});

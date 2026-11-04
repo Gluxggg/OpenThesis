@@ -676,12 +676,57 @@ export interface JournalBackMatter {
   acknowledgments?: string;
 }
 
+/**
+ * What kind of document a reference points at.
+ *
+ * Each one carries a different GB/T 7714-2015 marker: [M] 专著, [J] 期刊, [C] 论文集,
+ * [D] 学位论文, [S] 标准, [P] 专利, [R] 报告, [N] 报纸, [EB/OL] 电子资源.
+ */
+export type ReferenceKind =
+  | 'journal' | 'book' | 'chapter' | 'conference' | 'thesis'
+  | 'standard' | 'patent' | 'report' | 'newspaper'
+  | 'electronic' | 'database' | 'software' | 'archive' | 'other';
+
+/**
+ * One entry of 参考文献, in the parts GB/T 7714-2015 asks for.
+ *
+ * `text` is the escape hatch: a fully written entry wins and is printed as-is.
+ * Everything else is assembled by the formatter, so the punctuation, the [M]/[J]
+ * markers, the “等”/“et al.” truncation and the volume(issue): pages layout are the
+ * renderer's job and not the author's.
+ */
 export interface Reference {
+  /** Internal handle, used by “[[引用#id]]” in the body. Never printed. */
   id: string;
-  text: string;
-  type?: 'journal' | 'book' | 'conference' | 'thesis' | 'web' | 'standard' | 'other';
+  /** A fully written entry. When present it is printed verbatim. */
+  text?: string;
+  type?: ReferenceKind;
+  /** In print order. More than three are truncated per the standard. */
+  authors?: string[];
+  title?: string;
+  /** The container: 刊名 for [J], 论文集题名 for [C], 专著题名 for a 析出文献. */
+  container?: string;
+  /** 出版地. */
+  place?: string;
+  /** 出版者, or 保存者 for a thesis, or 制定者 for a standard. */
+  publisher?: string;
+  year?: number | string;
+  /** 卷. */
+  volume?: string;
+  /** 期. */
+  issue?: string;
+  /** 起止页码, e.g. “1-10” or “25”. */
+  pages?: string;
+  /** 版次, e.g. “3” for 第3版. */
+  edition?: string;
+  /** DOI, printed last when there is no URL. */
   doi?: string;
+  /** 获取和访问路径, for online sources. */
   url?: string;
+  /** 引用日期, YYYY-MM-DD, required with a URL by the standard. */
+  accessDate?: string;
+  /** Chinese entries truncate with “等”, English ones with “et al.”. */
+  language?: 'zh' | 'en';
 }
 
 // ════════════════════════════════════════════════════════════
