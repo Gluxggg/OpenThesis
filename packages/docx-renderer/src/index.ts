@@ -470,6 +470,9 @@ function renderHeading(
     : undefined;
 
   const numberPrefix = block.number ? `${block.number}  ` : '';
+  // `1. Introduction` or `1.1 Method`: the heading numbered itself, so the
+  // template's numbering instance would print a second number in front of it.
+  const selfNumbered = /^\s*(\d+(\.\d+)*[.、]?|第\s*[一二三四五六七八九十\d]+\s*[章节])\s/.test(block.text);
   // A 目录 entry points at a bookmark on its heading, so the heading carries one.
   const listed = headingBookmarks.get(block.text);
   const tocBookmarkId = listed ? nextBookmarkId() : 0;
@@ -480,7 +483,9 @@ function renderHeading(
     // A number written in the content file wins: the author asked for that
     // exact label. Otherwise the template's own numbering takes over, which is
     // how a guide that numbers chapters `1`, `1.1`, `2.3.3` gets honoured.
-    numbering: block.number ? undefined : autoNumbering,
+    // A heading that already carries its number must not also get the template's
+    // automatic numbering: `1. Introduction` came out as `1. 1. Introduction`.
+    numbering: block.number || selfNumbered ? undefined : autoNumbering,
     children: [
       ...(listed ? [captionBookmarkStart(listed.bookmark, tocBookmarkId)] : []),
       ...styledRuns(numberPrefix + block.text, style, style.font.bold),
@@ -983,8 +988,14 @@ function renderTable(
   // printable width. The template's widths only mean something at the same
   // column count — its 12-column example says nothing about a 2-column table.
   const templateColumns = template.tableFormat?.columnWidths;
+  const templateTotal = templateColumns?.reduce((sum, width) => sum + width, 0) ?? 0;
+  // The template's widths are drawn for the page it was made on. When they do not
+  // fit the width this table may occupy, scaling them down squeezes the columns
+  // until words wrap mid-cell - a 7707-twip column became 380 and "DOCX template"
+  // broke across four lines. An equal split is the honest answer instead: the
+  // template's proportions were for a different page, so they say nothing here.
   const colWidths = block.columnWidths
-    ?? (templateColumns && templateColumns.length === colCount
+    ?? (templateColumns && templateColumns.length === colCount && templateTotal <= printableWidth
       ? templateColumns
       : Array.from({ length: colCount }, () => Math.floor(printableWidth / colCount)));
   const tableWidth = colWidths.reduce((sum, width) => sum + width, 0);
