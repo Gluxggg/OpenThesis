@@ -348,7 +348,7 @@ export interface ParagraphFormatting {
 // ════════════════════════════════════════════════════════════
 
 export type BlockType =
-  | 'heading1' | 'heading2' | 'heading3' | 'heading4'
+  | 'heading1' | 'heading2' | 'heading3' | 'heading4' | 'heading5' | 'heading6'
   | 'paragraph' | 'paragraph_no_indent'
   | 'centered_text'
   | 'equation' | 'equation_numbered'
@@ -378,7 +378,7 @@ export type StyleRole = BlockType
    * from `JournalMeta` — so without a role they could only be hardcoded fonts.
    * With one they resolve through the template like every other block.
    */
-  | 'journal_title' | 'journal_author' | 'journal_affiliation'
+  | 'journal_title' | 'journal_subtitle' | 'journal_author' | 'journal_affiliation' | 'journal_date'
   | 'journal_abstract' | 'journal_keywords'
   /**
    * Thesis front matter. 摘要 and 关键词 are generated from `ThesisMeta` when a

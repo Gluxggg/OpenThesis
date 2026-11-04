@@ -14,3 +14,4 @@ dist/
 /thesis-content.json
 /journal-content.json
 /official-content.json
+_*.mjs

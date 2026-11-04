@@ -307,6 +307,22 @@ const JOURNAL_STYLES: Record<string, ParagraphStyle> = {
   },
 };
 
+/**
+ * The width a block may occupy, in twips.
+ *
+ * On a single-column page that is the printable width. On a two-column page it
+ * is the width of one column: a table or figure sized against the page runs
+ * straight through the column rule and off the edge.
+ */
+function contentWidth(template: DocumentTemplate): number {
+  const page = template.page;
+  const printable = Math.max(1200, (page?.width ?? 11906) - (page?.margins?.left ?? 0) - (page?.margins?.right ?? 0));
+  const columns = Math.max(1, page?.columns ?? 1);
+  if (columns === 1) return printable;
+  const gutter = page?.columnGutter ?? 0;
+  return Math.max(1200, Math.floor((printable - gutter * (columns - 1)) / columns));
+}
+
 // ── Style Resolver ────────────────────────────────────────
 
 function fallbackStyles(docType?: string): Record<string, ParagraphStyle> {
@@ -581,11 +597,9 @@ function renderEquation(
 
   if (block.number) {
     const bookmarkId = nextBookmarkId();
-    const page = template.page;
-    const printableWidth = Math.max(
-      1200,
-      (page?.width ?? 11906) - (page?.margins?.left ?? 1701) - (page?.margins?.right ?? 1701) - (page?.gutter ?? 0),
-    );
+    // The equation sits in the text column, which on a two-column page is half
+    // the printable width.
+    const printableWidth = contentWidth(template);
     const centerPos = Math.round(printableWidth / 2);
     const rightPos = printableWidth;
 
@@ -961,11 +975,9 @@ function renderTable(
   // Fit the table to the template's printable width rather than a hardcoded A4
   // constant: on a narrower page (or with wider margins) every table used to
   // overflow the right margin, because the cell widths always summed to 8504.
-  const page = template.page;
-  const printableWidth = Math.max(
-    1200,
-    (page?.width ?? 11906) - (page?.margins?.left ?? 0) - (page?.margins?.right ?? 0),
-  );
+  // A multi-column page gives each column its own width; sizing the table to
+  // the page made it run through the column rule.
+  const printableWidth = contentWidth(template);
   // Column widths, in order of authority: the content file, the template's own
   // table when it has the same number of columns, then an equal split of the
   // printable width. The template's widths only mean something at the same

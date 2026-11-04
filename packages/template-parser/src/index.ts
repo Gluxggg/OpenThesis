@@ -1401,17 +1401,31 @@ function detectStyleRoles(
     // Subsection titles
     { regex: /^(标题\s*3|Heading\s*3|Subsection|h3|标题3|小节标题|u?3级标题|三级标题|Head3|Head\s*3)$/i, role: 'heading3' },
     { regex: /^(标题\s*4|Heading\s*4|h4|标题4|u?4级标题)$/i, role: 'heading4' },
+{ regex: /^(标题\s*5|Heading\s*5|h5|标题5|u?5级标题)$/i, role: 'heading5' },
+{ regex: /^(标题\s*6|Heading\s*6|h6|标题6|u?6级标题)$/i, role: 'heading6' },
     // Body text
     // Body text. The stock names come first; the rest were added after parsing
     // real templates, where a university calls its body style `硕士正文样式` and an
     // Elsevier template calls it `Standard`.
     {
-      regex: /^(正文|u正文|Normal|Body|body\s*text|正文文本|普通|硕士正文样式|博士正文样式|学位论文正文|Standard|Body\s*Text\s*Indent|正文样式)$/i,
+      regex: /^(正文|u正文|Normal|Body|body\s*text|正文文本|普通|硕士正文样式|博士正文样式|学位论文正文|Standard|Body\s*Text\s*Indent|正文样式|Body\s*Text|First\s*Paragraph)$/i,
       role: 'paragraph',
     },
+    // Journal front matter, by the names Pandoc's reference document uses and
+    // that a journal template built from one carries: Title, Subtitle, Author,
+    // Date, Abstract. Without these a journal template recognised nothing but
+    // `paragraph`, and the renderer fell back to its own defaults for the rest.
+    { regex: /^(Title|论文题目|标题)$/i, role: 'journal_title' },
+    { regex: /^(Subtitle|副标题)$/i, role: 'journal_subtitle' },
+    { regex: /^(Author|Authors|作者)$/i, role: 'journal_author' },
+    { regex: /^(Affiliation|Affiliations|作者单位|单位)$/i, role: 'journal_affiliation' },
+    { regex: /^(Date|日期)$/i, role: 'journal_date' },
+    { regex: /^(Abstract|摘要)$/i, role: 'journal_abstract' },
+    { regex: /^(Keywords?|Key\s*words?|关键词)$/i, role: 'journal_keywords' },
+
     // Figure and table captions are separate roles: the guide spaces a table
     // caption (段前1行) differently from a figure caption (段前0.1行).
-    { regex: /^(u?图标题|图题|Figure\s*Caption)$/i, role: 'figure_caption' },
+    { regex: /^(u?图标题|图题|Figure\s*Caption|Caption|Figure|Figure\s*With\s*Caption|Image\s*Caption)$/i, role: 'figure_caption' },
     { regex: /^(u?表标题|表题|Table\s*Caption)$/i, role: 'table_caption' },
     // Headings of the front/back matter (摘要, 目录, 序, 附录, 致谢, 参考文献). The
     // guide sets these apart from a chapter heading — 段后16.5磅 and 2.41倍行距
@@ -1426,7 +1440,7 @@ function detectStyleRoles(
     { regex: /^(关键词|u?关键字|Keywords?)$/i, role: 'thesis_keywords' },
     { regex: /^(Key\s*words?|English\s*Keywords?)$/i, role: 'thesis_keywords_en' },
     // Reference entries under that heading.
-    { regex: /^u?参考文献条目.*$/i, role: 'reference_item' },
+    { regex: /^(u?参考文献条目.*|Bibliography)$/i, role: 'reference_item' },
     // Table-of-contents entries. Word writes them with these styles when the TOC
     // field is updated; they were being treated as body paragraphs.
     { regex: /^TOC\s*\d+$/i, role: 'toc_entry' },

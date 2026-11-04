@@ -2592,3 +2592,63 @@ test('a table with some columns named and some blank is rejected', async () => {
     },
   }), /headers/);
 });
+
+// ── Journal roles are found by the names Pandoc uses ──────
+
+test('a journal template using Pandoc style names binds every front-matter role', async () => {
+  // Pandoc's reference document defines Title, Author, Abstract, Keywords and so
+  // on, and a journal template built from one carries exactly those names. Before
+  // this, such a template recognised nothing but `paragraph`.
+  const journalTemplate = structuredClone(template);
+  journalTemplate.documentType = 'journal';
+  journalTemplate.roleWinners = {
+    paragraph: 'Body', heading1: 'Heading 1',
+    journal_title: 'Title', journal_subtitle: 'Subtitle',
+    journal_author: 'Author', journal_affiliation: 'Affiliation',
+    journal_date: 'Date', journal_abstract: 'Abstract',
+    journal_keywords: 'Keywords', figure_caption: 'Caption',
+    reference_item: 'Bibliography',
+  };
+  journalTemplate.styles = {
+    ...journalTemplate.styles,
+    Title: { font: { name: 'Times New Roman', size: 36, bold: true }, paragraph: { alignment: 'center' } },
+    Abstract: { font: { name: 'Times New Roman', size: 20 }, paragraph: { alignment: 'justified' } },
+  };
+
+  const buffer = await renderDocument({
+    template: journalTemplate,
+    document: {
+      type: 'journal',
+      meta: { title: 'A Title', authors: [{ name: 'A', affiliations: [] }], language: 'en', abstract: 'An abstract.' },
+      sections: [{ id: 's', type: 'introduction', title: 'Introduction', content: [{ type: 'paragraph', text: 'x' }] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  // The title takes the template's own Title style, not a built-in default.
+  const titleParagraph = /<w:p>(?:(?!<\/w:p>)[\s\S])*?A Title(?:(?!<\/w:p>)[\s\S])*?<\/w:p>/.exec(xml)?.[0] ?? '';
+  assert.ok(titleParagraph, 'expected the title paragraph');
+  assert.match(titleParagraph, /<w:sz w:val="36"\/>/, 'the title should take the template style size');
+});
+
+test('a table on a two-column page is sized to the column, not the page', async () => {
+  // Sizing against the page made the table run through the column rule and off
+  // the edge of the paper.
+  const twoColumn = structuredClone(template);
+  twoColumn.page.columns = 2;
+  twoColumn.page.columnGutter = 480;
+
+  const buffer = await renderDocument({
+    template: twoColumn,
+    document: {
+      type: 'thesis', meta: { title: 'Cols', degree: 'master', date: '2026', omitCover: true }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'table', caption: 'T', headers: ['A', 'B'], data: [['1', '2']] },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const tableWidth = Number(/<w:tblW w:type="dxa" w:w="(\d+)"\/>/.exec(xml)?.[1]);
+  const printable = twoColumn.page.width - twoColumn.page.margins.left - twoColumn.page.margins.right;
+  const column = Math.floor((printable - twoColumn.page.columnGutter) / 2);
+  assert.ok(tableWidth <= column, `the table (${tableWidth}) must fit one column (${column})`);
+});
