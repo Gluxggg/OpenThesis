@@ -948,3 +948,45 @@ without full stops. `formatAuthors` turns them round now:
 Anything that does not look like a name is returned unchanged rather than mangled.
 
 `pnpm check`: 209 tests, all passing.
+
+---
+
+## 22. A journal article, and the conventions it does not share with a thesis
+
+Rendering a real paper through the Elsevier template found that the journal path
+was a thesis path with a different page size. Everything else followed thesis
+conventions.
+
+| # | What the page showed | Cause | Status |
+|---|---|---|---|
+| Z-1 | A `TypeError` instead of a document | `author.affiliations.forEach` assumed the field; the schema makes it required but a caller can omit it | `(author.affiliations ?? [])`, so the validator's report is what the caller sees |
+| Z-2 | `表 2-1` / `图 2-1` in an English paper | Captions were always numbered per chapter with Chinese labels | A journal numbers **straight through** in the article's language: `Table 1`, `Figure 1` |
+| Z-3 | `摘  要：` in an English paper | The journal labels were hardcoded Chinese | `JournalMeta.language` decides: `Abstract.` / `Keywords:` against `摘要：` / `关键词：` |
+| Z-4 | `Elsevier 学术论文` in the running head | The thesis fallback (`校名 + 学位论文`) applied to every type | A journal gets no invented running head |
+| Z-5 | Section headings centred 黑体 | A template that declares no heading styles fell back to the **thesis** table | A `JOURNAL_STYLES` fallback: headings left-aligned bold, body 10.5pt unjustified-first-line |
+| Z-6 | `(2-1)` for an equation | Equations were numbered per chapter | Straight through: `(1)`, `(2)` |
+| Z-7 | `[[引用#r1]]` left as text | The citation index was only filled for a thesis | Filled for a journal too |
+
+### The rendered page
+
+```
+A template-driven approach to automated manuscript formatting
+
+                    San Zhang*  Si Li
+         (1) Example University, School of Computer Science, Beijing
+
+Abstract. Manuscript preparation is repetitive and error-prone. ...
+Keywords: document automation; template; typesetting; reproducibility
+
+Introduction
+
+    Preparing a manuscript ... has not changed [1]. ...
+
+Methods
+
+                    Table 1 Pipeline stages
+Figure 1 Pipeline overview
+                                  P = n_ok / n_total          (1)
+```
+
+`pnpm check`: 216 tests, all passing.

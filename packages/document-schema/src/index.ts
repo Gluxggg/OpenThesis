@@ -635,6 +635,12 @@ export interface JournalMeta {
   authors: JournalAuthor[];
   journalName?: string;
   articleType?: 'research' | 'review' | 'short_communication' | 'case_study' | 'letter';
+  /**
+   * The language the article is written in. It decides the labels the renderer
+   * prints around the content — “Abstract” and “Keywords” against “摘要” and
+   * “关键词”, and “Table 1” against “表 1-1”. Defaults to Chinese.
+   */
+  language?: 'zh' | 'en';
   abstract?: string;
   keywords?: string[];
   funding?: FundingInfo[];
