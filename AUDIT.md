@@ -417,3 +417,50 @@ Two details worth recording:
   silence.
 
 `pnpm check`: 161 tests, all passing.
+
+---
+
+## 11. Compatibility against real publisher templates
+
+Up to this point every parser test built its own `.docx`. That proves the parser
+handles what the tests imagine, not what a publisher ships. Four unmodified
+templates were downloaded and kept as fixtures:
+
+| Fixture | Source | Notes |
+|---|---|---|
+| `tests/fixtures/templates/acm-journal.docx` | [ACM interim Word template](https://www.acm.org/binaries/content/assets/publications/word_style/interim-template-style/interim-layout.docx) | 468 styles, 4 header/footer parts, `numbering.xml` |
+| `tests/fixtures/templates/cn-cjstp.docx` | [中国科技期刊研究 论文模板](https://www.cjstp.cn/attached/file/20200402/20200402172721_69.docx) | 10 styles, **no heading style at all** |
+| `tests/fixtures/templates/cn-dlmu-thesis.docx` | [《大连海事大学学报》模板](https://cbimg.cnki.net/Editor/2025/0311/dlhx/3cc38dd4-7f31-48b7-8bf2-3c361bbbcea4.docx) | 21 styles, body style is 硕士正文样式 |
+| `tests/fixtures/templates/elsevier-hardwarex.docx` | [HardwareX (Elsevier) template](https://zenodo.org/record/4792320) | 15 styles, body style is `Standard` |
+
+A 4.3 MB free-format journal template from Zenodo was also parsed during the
+sweep but not committed, to keep the repository small.
+
+### What the sweep found
+
+| # | Finding | Evidence | Status |
+|---|---|---|---|
+| R-1 | The body-text pattern only knew the stock names (`Normal`, `Body`, `正文`). Real templates name it by hand. | `cn-dlmu-thesis.docx` calls its body style **硕士正文样式** and applies it to its body paragraphs; the parser settled for `Normal` (宋体 21 half-points) instead, missing the 12pt body the template actually uses. `elsevier-hardwarex.docx` calls it **`Standard`** and applies it 23 times. | Fixed — the pattern now covers 硕士/博士正文样式, 学位论文正文, `Standard`, `Body Text Indent` |
+| R-2 | The heading patterns missed the names publishers use. | ACM and the Zenodo journal template name their headings `Head1` / `Heading1`; Chinese journals use 一级标题/二级标题. | Fixed — `一级标题`, `二级标题`, `三级标题`, `Head1..3`, `MainHeading` added |
+| R-3 | **Some real templates declare no heading styles at all.** | `cn-cjstp.docx` has 10 styles: `Normal`, `footer`, `header`, `footnote text`, `HTML Preformatted`, `p0` — nothing for a heading. Journals routinely format headings directly. | **Not a defect.** The renderer falls back to the role defaults, which is the documented contract ("a template that carries no formatting still produces correct headings"). A test pins that such a template still parses and still finds its body style, rather than failing |
+| R-4 | A template with hundreds of styles maps almost all of them to `paragraph`. | `acm-journal.docx`: 468 styles, ~300 of them land on `paragraph` because none of them match a name pattern or carry an outline level. | **Accepted.** `pickRoleWinners` prefers a style the document actually applies, so `Para` (used 6 times) loses to `Normal` (a stock style). Output is correct — headings get their own size, body gets the template font — but the role table is noisy. Recorded, not changed: narrowing it needs a "which style does the body *really* use" heuristic that would be guesswork |
+
+### Verified behaviour
+
+All four fixtures parse, and a document with a heading, a body paragraph, a
+three-line table and an equation renders against each of them:
+
+```
+template                  heading2        body
+acm-journal.docx          PMingLiU 26     PMingLiU 18
+cn-dlmu-thesis.docx       黑体 28          宋体 24
+elsevier-hardwarex.docx   黑体 28          Calibri 22
+```
+
+The table width comes out at the template's printable width (`10080` twips for
+ACM's 216 × 279 mm page), not the old hardcoded 8504.
+
+Eight local `.docx` files were also parsed as a cross-check — three OpenThesis
+outputs and five 博导申请 forms — and every one parsed without throwing.
+
+`pnpm check`: 166 tests, all passing.

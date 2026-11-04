@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parsePdfTemplate, parseTemplate } from '../packages/template-parser/dist/index.js';
 import { buildTestPdf } from './helpers/pdf.mjs';
 
@@ -660,4 +663,64 @@ test('reads numbering.xml and the styles it binds', async () => {
     [{ ilvl: 0, text: '第%1章', format: 'decimal', pStyle: 'ch' }],
   );
   assert.deepEqual(template.styles.ch.paragraph.numbering, { numId: 1, ilvl: 0 });
+});
+
+// ── Real-world template compatibility ────────────────────────
+//
+// These four are unmodified .docx files downloaded from their publishers, kept
+// as fixtures so a parser change is checked against something it did not
+// generate. Their provenance:
+//
+//   acm-journal.docx      ACM interim Word template (acm.org)
+//   cn-cjstp.docx         中国科技期刊研究 论文模板 (cjstp.cn)
+//   cn-dlmu-thesis.docx   《大连海事大学学报》论文模板 (cnki.net)
+//   elsevier-hardwarex.docx  HardwareX (Elsevier) article template (zenodo.org)
+
+const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'templates');
+const FIXTURES = new URL('./fixtures/templates/', import.meta.url);
+const fixture = (name) => readFileSync(join(FIXTURE_DIR, name));
+
+test('parses every real-world template without throwing', async () => {
+  for (const name of ['acm-journal.docx', 'cn-cjstp.docx', 'cn-dlmu-thesis.docx', 'elsevier-hardwarex.docx']) {
+    const template = await parseTemplate(fixture(name), { documentType: 'thesis', organization: 'Fixture' });
+    assert.ok(Object.keys(template.styles).length > 0, `${name}: expected at least one style`);
+    assert.ok(template.page.width > 0 && template.page.height > 0, `${name}: expected page geometry`);
+  }
+});
+
+test('picks the body style a real template actually uses', async () => {
+  // `cn-dlmu-thesis.docx` calls its body style 硕士正文样式 and applies it to its
+  // body paragraphs; the old pattern list only knew the stock names and settled
+  // for `Normal`. `elsevier-hardwarex.docx` calls it `Standard`.
+  const dlmu = await parseTemplate(fixture('cn-dlmu-thesis.docx'), { documentType: 'thesis' });
+  const dlmuBody = dlmu.styles[dlmu.roleWinners.paragraph];
+  assert.equal(dlmuBody.font.size, 24, 'expected the 12pt 硕士正文样式, not Normal at 21');
+  assert.equal(dlmuBody.font.eastAsia, '宋体');
+
+  const hardwarex = await parseTemplate(fixture('elsevier-hardwarex.docx'), { documentType: 'thesis' });
+  assert.equal(hardwarex.roleWinners.paragraph, 'Standard');
+});
+
+test('a template that defines no heading styles still parses and still warns', async () => {
+  // Journals routinely format headings directly rather than through named styles.
+  // That is not a parser failure — the renderer falls back to the role defaults —
+  // but the template must not pretend it declared heading formatting.
+  const cjstp = await parseTemplate(fixture('cn-cjstp.docx'), { documentType: 'thesis' });
+  const headingIds = Object.keys(cjstp.styleRoles).filter(id => cjstp.styleRoles[id].startsWith('heading'));
+  assert.equal(headingIds.length, 0, 'this fixture genuinely declares no heading style');
+  // Its body style is still found, so a document built from it is not left unstyled.
+  assert.ok(cjstp.roleWinners.paragraph, 'expected a body style');
+});
+
+test('a heading name a real template uses is recognised', async () => {
+  // ACM and the Zenodo journal template both name their heading styles `Head1`
+  // / `Heading1` rather than Word's stock `Heading 1`.
+  const acm = await parseTemplate(fixture('acm-journal.docx'), { documentType: 'thesis' });
+  const headingRoles = Object.entries(acm.styleRoles)
+    .filter(([, role]) => role === 'heading1')
+    .map(([id]) => id);
+  assert.ok(
+    headingRoles.some(id => /^Head1|^Head\s*1|^Heading1/i.test(id)),
+    `expected a level-1 heading among: ${headingRoles.slice(0, 10).join(', ')}`,
+  );
 });

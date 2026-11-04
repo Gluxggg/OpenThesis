@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createUSTBTemplate, renderDocument } from '../packages/docx-renderer/dist/index.js';
+import { parseTemplate } from '../packages/template-parser/dist/index.js';
 
 const template = createUSTBTemplate();
 
@@ -1411,4 +1413,40 @@ test('a section break inside the body starts a new section with its own page set
   assert.ok(portraitAt >= 0 && landscapeAt > portraitAt);
   const sectionStart = xml.lastIndexOf('<w:sectPr', landscapeAt);
   assert.ok(sectionStart > portraitAt, 'the landscape section starts after the portrait passage');
+});
+
+// ── Real-world template rendering ────────────────────────────
+
+test('renders a document with each real-world template', async () => {
+  // Parsing a template is only half the promise. These four were downloaded
+  // from their publishers, so this exercises the renderer against geometry,
+  // fonts and style tables it did not author.
+  const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'templates');
+  const doc = {
+    type: 'thesis', meta: { title: 'Compat', degree: 'master', date: '2026' }, cover: [],
+    sections: [{
+      id: 'c1', type: 'chapter', title: 'Chapter One',
+      content: [
+        { type: 'heading2', text: 'Section A' },
+        { type: 'paragraph', text: 'Body paragraph.' },
+        { type: 'table', caption: 'Table 1', headers: ['A', 'B'], data: [['1', '2']] },
+        { type: 'equation', latex: 'E = mc^2', number: '1-1' },
+      ],
+    }],
+  };
+
+  for (const name of ['acm-journal.docx', 'cn-cjstp.docx', 'cn-dlmu-thesis.docx', 'elsevier-hardwarex.docx']) {
+    const template = await parseTemplate(readFileSync(join(fixtureDir, name)), { documentType: 'thesis' });
+    const buffer = await renderDocument({ template, document: doc });
+    const { xml } = await documentXml(buffer);
+
+    assert.match(xml, /<w:t[^>]*>Body paragraph\.<\/w:t>/, `${name}: body text missing`);
+    assert.match(xml, /<m:oMath>/, `${name}: equation missing`);
+    // A page's width comes from the template, so the table has to fit inside it
+    // rather than the old hardcoded 8504 twips.
+    // The writer emits the attributes in this order: type first, then width.
+    const tableWidth = Number(xml.match(/<w:tblW w:type="dxa" w:w="(\d+)"\/>/)?.[1] ?? 0);
+    const pageWidth = template.page.width - template.page.margins.left - template.page.margins.right;
+    assert.ok(tableWidth > 0 && tableWidth <= pageWidth + 2, `${name}: table width ${tableWidth} exceeds the printable ${pageWidth}`);
+  }
 });
