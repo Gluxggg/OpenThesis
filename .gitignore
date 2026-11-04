@@ -15,3 +15,4 @@ dist/
 /journal-content.json
 /official-content.json
 _*.mjs
+commitmsg*.txt
