@@ -1815,8 +1815,76 @@ interface RenderedPart {
  * with the body, after 参考文献.
  */
 const FRONT_MATTER_TYPES: ReadonlySet<ThesisSection['type']> = new Set([
-  'abstract', 'toc', 'list_of_figures', 'list_of_tables',
+  'abstract', 'toc', 'list_of_figures', 'list_of_tables', 'nomenclature',
 ]);
+
+/**
+ * Turn a 符号说明 section into the table its guide expects.
+ *
+ * The symbols are content, the table is layout: the renderer owns the column
+ * headings and the styling, so every thesis's 符号说明 looks the same and nobody
+ * hand-writes a table for it.
+ */
+function nomenclatureTable(section: ThesisSection): ContentBlock | undefined {
+  const symbols = section.symbols;
+  if (!symbols || symbols.length === 0) return undefined;
+  const withUnit = symbols.some(entry => entry.unit);
+  return {
+    type: 'table',
+    caption: '',
+    headers: withUnit ? ['符号', '含义', '单位'] : ['符号', '含义'],
+    data: symbols.map(entry => (withUnit
+      ? [entry.symbol, entry.meaning, entry.unit ?? '']
+      : [entry.symbol, entry.meaning])),
+  } as ContentBlock;
+}
+
+/**
+ * The cover a document gets when it did not write one.
+ *
+ * Every field of a cover is already in `meta` - title, English title, author,
+ * supervisor, department, major, date - so a thesis that leaves `cover` empty was
+ * simply losing the page. The tiers are the template's own cover styles
+ * (`cover_line`, `cover_title`, `cover_meta`), which is where the guide's font
+ * sizes come from.
+ */
+function autoCover(doc: ThesisDocument, template: DocumentTemplate): ContentBlock[] {
+  const meta = doc.meta ?? ({} as ThesisDocument['meta']);
+  const org = template.meta?.organization ?? '';
+  const degree = meta.degree === 'doctor' ? '博士' : meta.degree === 'bachelor' ? '学士' : '硕士';
+  const lines: ContentBlock[] = [];
+
+  if (org) {
+    lines.push({ type: 'centered_text', text: `${org}${degree}学位论文`, styleRole: 'cover_line' } as ContentBlock);
+  }
+  lines.push({ type: 'spacer', cm: 2.5 } as ContentBlock);
+  if (meta.title) lines.push({ type: 'centered_text', text: meta.title, styleRole: 'cover_title' } as ContentBlock);
+  if (meta.titleEn) lines.push({ type: 'centered_text', text: meta.titleEn, styleRole: 'cover_title' } as ContentBlock);
+  lines.push({ type: 'spacer', cm: 2.5 } as ContentBlock);
+
+  const rows: [string, string | undefined][] = [
+    ['研究生', meta.author],
+    ['指导教师', meta.supervisor],
+    ['培养学院', meta.department],
+    ['专业', meta.major],
+    ['日期', meta.date],
+  ];
+  for (const [label, value] of rows) {
+    if (!value) continue;
+    lines.push({ type: 'centered_text', text: `${label}：${value}`, styleRole: 'cover_line' } as ContentBlock);
+  }
+  // 中图分类号 sits at the foot of the cover, in the 五号 style.
+  if (meta.classificationNumber) {
+    lines.push({ type: 'spacer', cm: 1 } as ContentBlock);
+    lines.push({
+      type: 'centered_text',
+      text: `中图分类号：${meta.classificationNumber}`,
+      styleRole: 'cover_meta',
+    } as ContentBlock);
+  }
+  lines.push({ type: 'page_break' } as ContentBlock);
+  return lines;
+}
 
 /** A 目录 is a field, not text — see `tocBlock`. */
 /**
@@ -1868,19 +1936,19 @@ function registerHeading(level: number, text: string): HeadingEntry {
  */
 function collectHeadingIndex(doc: OpenThesisDocument): void {
   const skipped = new Set(['toc']);
-  const visit = (sections: readonly unknown[]): void => {
+  // Depth, not section type: a top-level part (a chapter, 摘要, 参考文献, an
+  // appendix) is level 1, its subsections are level 2. Deciding by type left the
+  // front-matter headings indented under nothing.
+  const visit = (sections: readonly unknown[], depth: number): void => {
     for (const raw of sections) {
       const section = raw as { type?: string; title?: string; subsections?: readonly unknown[] };
       if (!section || !section.type || !section.title) continue;
-      if (!skipped.has(section.type)) {
-        const level = section.type === 'chapter' ? 1 : 2;
-        registerHeading(level, section.title);
-      }
-      if (section.subsections) visit(section.subsections);
+      if (!skipped.has(section.type)) registerHeading(depth, section.title);
+      if (section.subsections) visit(section.subsections, depth + 1);
     }
   };
   if (doc.type !== 'thesis') return;
-  visit(doc.sections ?? []);
+  visit(doc.sections ?? [], 1);
   // The back matter is part of the 目录 too. Its headings are the fixed ones the
   // renderer prints, so they can be listed without looking at any content.
   const back = doc.backMatter;
@@ -1963,10 +2031,15 @@ function renderThesisParts(
 
   // Cover Page. A trailing explicit break is dropped: the section break that
   // follows the cover already starts a new page.
-  if (doc.cover && doc.cover.length > 0) {
+  // A thesis that leaves `cover` empty was losing the page even though every
+  // field of it is already in `meta`.
+  const coverBlocks = doc.cover && doc.cover.length > 0
+    ? doc.cover
+    : (doc.meta?.omitCover ? [] : autoCover(doc, template));
+  if (coverBlocks.length > 0) {
     parts.push({
       role: 'cover',
-      children: processBlocks(trimTrailingPageBreak(doc.cover), template, contentDir, undefined, state),
+      children: processBlocks(trimTrailingPageBreak(coverBlocks), template, contentDir, undefined, state),
     });
   }
 
@@ -2001,6 +2074,12 @@ function renderThesisParts(
           children.push(renderParagraph(template, { type: 'paragraph', text: '（本文无此类内容）' }));
         }
         for (const entry of entries) children.push(listEntryParagraph(entry, template));
+        continue;
+      }
+      const symbols = section.type === 'nomenclature' ? nomenclatureTable(section) : undefined;
+      if (symbols) {
+        children.push(renderHeading(template, { type: 'heading1', text: section.title, styleRole: 'section_heading' }));
+        children.push(...processBlocks([symbols], template, contentDir, undefined, state));
         continue;
       }
       children.push(...processBlocks(trimTrailingPageBreak(flattenSections([section])), template, contentDir, undefined, state));

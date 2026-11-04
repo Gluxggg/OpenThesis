@@ -561,16 +561,43 @@ export interface ThesisMeta {
   abstractEn?: string;
   classificationNumber?: string;
   studentId?: string;
+  /**
+   * Suppress the cover the renderer would otherwise build from `meta`.
+   *
+   * An empty `cover` array means "build one for me": every field of a cover is
+   * already in this object. A document that genuinely wants no cover page sets
+   * this to true.
+   */
+  omitCover?: boolean;
+}
+
+/**
+ * One line of a 符号说明: the symbol and what it stands for.
+ *
+ * A 符号说明 is a two-column table in every guide that asks for one, so the
+ * content names the symbols and the renderer builds the table.
+ */
+export interface SymbolEntry {
+  symbol: string;
+  meaning: string;
+  /** Optional third column: the unit, when the symbol carries one. */
+  unit?: string;
 }
 
 export interface ThesisSection {
   id: string;
   type: 'chapter' | 'abstract' | 'acknowledgement' | 'toc'
-      | 'list_of_figures' | 'list_of_tables' | 'references' | 'appendix';
+      | 'list_of_figures' | 'list_of_tables' | 'nomenclature'
+      | 'references' | 'appendix';
   title: string;
   number?: string;
   content: ContentBlock[];
   subsections?: ThesisSection[];
+  /**
+   * Rows of a 符号说明. Present on a `nomenclature` section; a section of that
+   * type with no `symbols` falls back to its ordinary `content` blocks.
+   */
+  symbols?: SymbolEntry[];
 }
 
 export interface ThesisBackMatter {

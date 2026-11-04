@@ -1977,3 +1977,100 @@ test('the back matter parts each start on their own page', async () => {
   // 参考文献, 作者简历 and 独创性说明 each carry a break before their heading.
   assert.equal((xml.match(/<w:pageBreakBefore\/>/g) ?? []).length >= 3, true);
 });
+
+// ── \u7b26\u53f7\u8bf4\u660e and the cover built from meta ──
+
+test('a \u7b26\u53f7\u8bf4\u660e section is rendered as the table its guide expects', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Nomen', degree: 'master', date: '2026' }, cover: [], 
+      sections: [
+        { id: 'sym', type: 'nomenclature', title: '\u7b26\u53f7\u8bf4\u660e', content: [],
+          symbols: [
+            { symbol: 'E', meaning: '\u5f39\u6027\u6a21\u91cf', unit: 'GPa' },
+            { symbol: '\u03bd', meaning: '\u6cca\u677e\u6bd4' },
+          ] },
+      ],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+
+  // The renderer owns the table: the content named the symbols only.
+  assert.match(xml, /\u7b26\u53f7<\/w:t>/);
+  assert.match(xml, /\u542b\u4e49<\/w:t>/);
+  assert.match(xml, /\u5355\u4f4d<\/w:t>/);
+  assert.match(xml, /E<\/w:t>/);
+  assert.match(xml, /\u5f39\u6027\u6a21\u91cf/);
+  assert.match(xml, /GPa/);
+  assert.ok(xml.includes('<w:tbl>'), 'the symbols must be in a table');
+});
+
+test('a \u7b26\u53f7\u8bf4\u660e with no symbols falls back to its own content', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Nomen2', degree: 'master', date: '2026' }, cover: [],
+      sections: [
+        { id: 'sym', type: 'nomenclature', title: '\u7b26\u53f7\u8bf4\u660e', content: [
+          { type: 'paragraph', text: '\u81ea\u5df1\u5199\u7684\u8bf4\u660e\u3002' },
+        ] },
+      ],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /\u81ea\u5df1\u5199\u7684\u8bf4\u660e/);
+});
+
+test('a cover is built from meta when the document did not write one', async () => {
+  // Every field of a cover is already in `meta`; a thesis that left `cover` empty
+  // was simply losing the page.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis',
+      meta: {
+        title: '\u4e00\u4e2a\u9898\u76ee', titleEn: 'A Title', author: '\u5f20\u4e09',
+        supervisor: '\u674e\u56db', department: '\u67d0\u5b66\u9662', major: '\u67d0\u4e13\u4e1a',
+        degree: 'master', date: '2026\u5e746\u6708',
+      },
+      cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: '\u7b2c\u4e00\u7ae0', content: [{ type: 'paragraph', text: 'x' }] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /\u4e00\u4e2a\u9898\u76ee/, 'the Chinese title');
+  assert.match(xml, /A Title/, 'the English title');
+  assert.match(xml, /\u7814\u7a76\u751f\uff1a\u5f20\u4e09/, 'the author row');
+  assert.match(xml, /\u6307\u5bfc\u6559\u5e08\uff1a\u674e\u56db/, 'the supervisor row');
+  assert.match(xml, /\u5b66\u4f4d\u8bba\u6587/, 'the degree line');
+});
+
+test('meta.omitCover suppresses the generated cover', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis',
+      meta: { title: '\u65e0\u5c01\u9762', degree: 'master', date: '2026', omitCover: true },
+      cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: '\u7b2c\u4e00\u7ae0', content: [{ type: 'paragraph', text: 'x' }] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.doesNotMatch(xml, /\u5b66\u4f4d\u8bba\u6587/, 'no cover line should be generated');
+});
+
+test('a hand-written cover still wins over the generated one', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis',
+      meta: { title: '\u5143\u6570\u636e\u9898\u76ee', degree: 'master', date: '2026' },
+      cover: [{ type: 'centered_text', text: '\u624b\u5199\u5c01\u9762\u884c' }],
+      sections: [{ id: 'c1', type: 'chapter', title: '\u7b2c\u4e00\u7ae0', content: [{ type: 'paragraph', text: 'x' }] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /\u624b\u5199\u5c01\u9762\u884c/);
+  assert.doesNotMatch(xml, /\u5143\u6570\u636e\u9898\u76ee<\/w:t>/, 'the generated cover must not be added too');
+});
