@@ -22,6 +22,8 @@ import type {
   ISectionOptions, ISectionPropertiesOptions, IPageNumberTypeAttributes,
   MathComponent, INumberingOptions, IParagraphStyleOptions,
 } from 'docx';
+import { formatReference } from './references.js';
+import type { Reference } from '@openthesis/document-schema';
 import type {
   DocumentTemplate,
   ThesisDocument,
@@ -452,6 +454,32 @@ function renderHeading(
   });
 }
 
+/**
+ * One entry of 参考文献: `[1] 张三. 题名[J]. 刊名, 2024, 47(3): 1-10.`
+ *
+ * A two-line entry wraps under its own text rather than back to the margin -
+ * that is what every guide means by 悬挂缩进. The template decides when it
+ * declares one; two characters of the body size is the usual amount.
+ */
+function referenceItemParagraph(ref: Reference, position: number, template: DocumentTemplate): Paragraph {
+  const style = resolveStyle(template, 'reference_item');
+  const declares = style.paragraph.hangingIndent ?? 0;
+  // One character is the font size in twips, so two characters is 2 x size.
+  const twoChars = (style.font.size ?? 24) * 10;
+  return new Paragraph({
+    children: styledRuns(`[${position}] ${formatReference(ref)}`, style),
+    alignment: mapAlignment(style.paragraph.alignment),
+    indent: declares > 0
+      ? { left: style.paragraph.leftIndent ?? declares, hanging: declares }
+      : { left: twoChars, hanging: twoChars },
+    spacing: {
+      before: style.paragraph.spaceBefore,
+      after: style.paragraph.spaceAfter,
+      ...lineStyle(style),
+    },
+  });
+}
+
 function renderParagraph(
   template: DocumentTemplate,
   block: ParagraphBlock,
@@ -770,6 +798,7 @@ function styledRun(
   style: ParagraphStyle,
   forceBold?: boolean,
   customSize?: number,
+  superScript?: boolean,
 ): TextRun {
   return new TextRun({
     text,
@@ -777,6 +806,7 @@ function styledRun(
     italics: style.font.italic,
     color: style.font.color,
     size: customSize ?? style.font.size,
+    ...(superScript ? { superScript: true } : {}),
     font: {
       ascii: style.font.name,
       hAnsi: style.font.name,
@@ -812,7 +842,7 @@ function styledRuns(
   // One pattern for both markers, and it must list the same labels as CROSS_REF:
   // this used to be a second, narrower copy that only knew 表 and 图, so `[[式1-1]]`
   // was recognised by the test above and then left as literal text here.
-  const pattern = new RegExp(`${mathSource}|\\[\\[(表|图|式)\\s*([^\\[\\]]+?)\\]\\]`, 'g');
+  const pattern = new RegExp(`${mathSource}|\\[\\[(表|图|式|引用)\\s*([^\\[\\]]+?)\\]\\]`, 'g');
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -821,7 +851,11 @@ function styledRuns(
       runs.push(styledRun(text.slice(lastIndex, match.index), style, forceBold, customSize));
     }
 
-    if (match[2]) {
+    if (match[2] === '引用') {
+      // A citation is a number, not a field: the reference list is the source of
+      // truth and its order is fixed at build time.
+      runs.push(citationRun(match[3], style, forceBold, customSize));
+    } else if (match[2]) {
       const resolved = resolveReference(`${match[2]}${match[3].trim()}`);
       runs.push(resolved === undefined ? styledRun(`[[${match[2]}${match[3].trim()}]]`, style, forceBold, customSize) : crossReferenceField(resolved.bookmark, resolved.result));
     } else {
@@ -2136,10 +2170,7 @@ function renderThesisParts(
       pageBreakParagraph(),
       renderHeading(template, { type: 'heading1', text: '参考文献', styleRole: 'section_heading' }),
       ...doc.backMatter.references.map((ref, index) =>
-        renderParagraph(template, {
-          type: 'paragraph_no_indent',
-          text: `[${index + 1}] ${ref.text}`,
-        }, undefined, 'reference_item'),
+        referenceItemParagraph(ref, index + 1, template),
       ),
     );
   }
@@ -2351,7 +2382,7 @@ function renderJournalArticle(
         ...doc.backMatter.references.map((ref, index) =>
           renderParagraph(template, {
             type: 'paragraph_no_indent',
-            text: `[${index + 1}] ${ref.text}`,
+            text: `[${index + 1}] ${formatReference(ref)}`,
           })
         )
       );
@@ -2924,6 +2955,14 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   numberCaptionsInDocument(doc);
   // The 目录 is built before the body renders for the same reason: its entries
   // are the headings, and the headings need their bookmarks assigned up front.
+  // The reference list is numbered before the body renders, so a
+  // `[[引用#r1]]` in chapter 1 can name an entry listed at the end.
+  resetCitationIndex();
+  if (doc.type === 'thesis') {
+    (doc.backMatter?.references ?? []).forEach((ref, position) => {
+      citationIndex.set(ref.id, position + 1);
+    });
+  }
   resetHeadingIndex();
   collectHeadingIndex(doc);
 
@@ -3315,7 +3354,7 @@ function borderStyleOf(value: string): (typeof BorderStyle)[keyof typeof BorderS
  * turns into the field. A manuscript that writes the number out longhand keeps
  * working exactly as before — its text is left alone.
  */
-const CROSS_REF = /\[\[(表|图|式)\s*([^\[\]]+?)\]\]/g;
+const CROSS_REF = /\[\[(表|图|式|引用)\s*([^\[\]]+?)\]\]/g;
 
 /** The bookmark name a caption's number lives under. */
 function captionBookmark(label: string): string {
@@ -3483,13 +3522,53 @@ function resetBookmarks(): void {
 }
 
 /**
- * Every caption in the document, and the numbers they ended up with.
+ * Reference id to its printed number: the position in 参考文献, 1-based.
  *
- * A caption with no `number` used to render with no number at all, which made it
- * unreachable from a cross-reference. Captions are numbered here instead, per
- * chapter, in document order — the standard 表1-1 / 图2-3 form — and a reference
- * can name either that label (`[[表1-1]]`) or the block's id (`[[表#tab1]]`).
+ * A citation is printed as a superscript `[1]`, and its number is the entry's
+ * place in the list — so the list has to be indexed before any body text with a
+ * `[[引用#r1]]` in it is rendered.
  */
+let citationIndex = new Map<string, number>();
+
+function resetCitationIndex(): void {
+  citationIndex = new Map();
+}
+
+/**
+ * Compress cited numbers into GB/T 7714's `[1-2]` / `[1,3]` form.
+ *
+ * A run of three or more becomes a range; anything shorter is listed, because
+ * `[1-2]` for two entries is no shorter than `[1,2]`.
+ */
+function formatCitationNumbers(numbers: number[]): string {
+  const sorted = [...new Set(numbers)].sort((a, b) => a - b);
+  const groups: string[] = [];
+  let start = 0;
+  while (start < sorted.length) {
+    let end = start;
+    while (end + 1 < sorted.length && sorted[end + 1] === sorted[end] + 1) end += 1;
+    const run = end - start + 1;
+    groups.push(run >= 3 ? `${sorted[start]}-${sorted[end]}` : sorted.slice(start, end + 1).join(', '));
+    start = end + 1;
+  }
+  return groups.join(', ');
+}
+
+/** A superscript `[n]` for a `[[引用#r1]]` marker. */
+function citationRun(raw: string, style: ParagraphStyle, forceBold?: boolean, customSize?: number): XmlComponent {
+  const ids = raw.replace(/^[#:：]/, '').split(/[,，]/).map(id => id.trim()).filter(Boolean);
+  const numbers: number[] = [];
+  for (const id of ids) {
+    const number = citationIndex.get(id);
+    if (number === undefined) {
+      console.warn(`Citation "${id}" matches no entry in 参考文献; the marker will be left as text.`);
+      return styledRun(`[[引用${raw}]]`, style, forceBold, customSize);
+    }
+    numbers.push(number);
+  }
+  return styledRun(`[${formatCitationNumbers(numbers)}]`, style, forceBold, customSize, true);
+}
+
 /**
  * Every caption in the document, and the structure Word needs to number it.
  *
