@@ -23,6 +23,8 @@ import type {
   MathComponent, INumberingOptions, IParagraphStyleOptions,
 } from 'docx';
 import { formatReference } from './references.js';
+import { validateJournalRequirements } from './requirements.js';
+import { validateDocument } from '@openthesis/document-schema';
 import type { Reference, ThesisMeta } from '@openthesis/document-schema';
 import type {
   DocumentTemplate,
@@ -941,7 +943,11 @@ function renderTable(
   block: TableBlock,
   docType?: string,
 ): (Paragraph | Table)[] {
-  const colCount = block.headers.length;
+  // A label/value table has no header row, so it takes its width from its first
+  // data row. A table with neither headers nor rows has no columns at all.
+  const colCount = block.headers.length > 0
+    ? block.headers.length
+    : (block.data[0]?.length ?? 0);
   if (colCount === 0) {
     throw new Error(`Table "${block.caption}" must define at least one header column.`);
   }
@@ -1044,7 +1050,10 @@ function renderTable(
       })
     : undefined;
 
-  // Header row
+  // Header row. A table whose `headers` are all empty is a label/value table -
+  // the Specifications table several journals open with - and gets no header row,
+  // because there is nothing to put in it.
+  const headerless = block.headers.every(header => !header || !header.trim());
   const headerRow = new TableRow({
     tableHeader: true,
     children: block.headers.map((h, ci) =>
@@ -1170,7 +1179,7 @@ function renderTable(
               top: NO, bottom: NO, left: NO, right: NO,
               insideHorizontal: NO, insideVertical: NO,
             }),
-    rows: [headerRow, ...dataRows],
+    rows: headerless ? dataRows : [headerRow, ...dataRows],
   });
 
   // Spacer after table
@@ -2369,6 +2378,13 @@ function renderJournalArticle(
 ): (Paragraph | Table)[] {
   const children: (Paragraph | Table)[] = [];
 
+  // The template states what the journal requires - a title length, a keyword
+  // count, the sections it expects, its opening table. Layout alone does not
+  // satisfy those, so they are checked and reported rather than silently missed.
+  for (const issue of validateJournalRequirements(doc, template.requirements)) {
+    console.warn(`${issue.path}: ${issue.message}`);
+  }
+
   // Front matter. Every piece resolves through `resolveStyle` against the
   // template like any other block: this section used to bake its fonts, sizes
   // and spacing in as literals, so a journal rendered from a journal template
@@ -2475,6 +2491,18 @@ function renderJournalArticle(
         ...lineStyle(keywordsStyle),
       },
     }));
+  }
+
+  // The journal's fixed opening table, when its template asks for one. The
+  // author supplies the values; the table itself is layout.
+  if (doc.specifications && doc.specifications.length > 0) {
+    children.push(...processBlocks([{
+      type: 'table',
+      caption: '',
+      // HardwareX's table has no header row: a label on the left, the value on the right.
+      headers: ['', ''],
+      data: doc.specifications.map(row => [row.label, row.value]),
+    } as ContentBlock], template, contentDir, undefined, state));
   }
 
   // Divider line or spacer before body
@@ -3053,6 +3081,14 @@ function buildSingleSection(
 export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   const { template, document: doc, headerText, showPageNumbers = true, contentDir } = options;
   const pageNumberRestart = options.pageNumberRestart ?? true;
+
+  // Validate before building: a caller that uses the library directly deserves
+  // the same clear message the CLI prints, not an error from deep inside the
+  // OOXML builder. `validateDocument` reports every problem at once.
+  const issues = validateDocument(doc);
+  if (issues.length > 0) {
+    throw new Error(`Invalid document: ${issues.map(issue => `${issue.path} ${issue.message}`).join('; ')}`);
+  }
 
   // Start every render from a cold style cache: a caller that mutates the
   // template between renders must see its own edit, and the cache is otherwise

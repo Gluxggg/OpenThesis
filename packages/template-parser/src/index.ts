@@ -6,6 +6,7 @@
 // ============================================================
 
 import JSZip from 'jszip';
+import { readJournalRequirements } from './requirements.js';
 import { XMLParser } from 'fast-xml-parser';
 import type {
   DocumentTemplate,
@@ -140,6 +141,12 @@ export async function parseTemplate(
 
   const numbering = await readNumbering(zip, parser);
 
+  // A journal template states its requirements in its own text (Title: [Max. 20
+  // words], Keywords: [At least 3], the sections it expects). Nothing about those
+  // is layout, so they are read separately and reported.
+  const documentTexts = docXml ? documentParagraphTexts(docXml, parser) : [];
+  const requirements = readJournalRequirements(documentTexts, meta.documentType);
+
   return {
     meta,
     page: pageSettings,
@@ -153,6 +160,7 @@ export async function parseTemplate(
     ...(numbering.length > 0 ? { numbering } : {}),
     ...(format.tableFormat ? { tableFormat: format.tableFormat } : {}),
     ...(format.imageFormat ? { imageFormat: format.imageFormat } : {}),
+    ...(requirements ? { requirements } : {}),
   };
 }
 
@@ -320,6 +328,55 @@ async function readNumbering(zip: JSZip, parser: XMLParser): Promise<TemplateNum
     numbering.push({ numId, abstractId, levels });
   }
   return numbering;
+}
+
+/**
+ * The text of every paragraph in `word/document.xml`, in document order.
+ *
+ * A journal template is an instruction sheet, so its body text *is* the spec.
+ * Reading it is how the requirements get out.
+ */
+function documentParagraphTexts(xml: string, parser: XMLParser): string[] {
+  const parsed = parser.parse(xml) as {
+    'w:document'?: { 'w:body'?: { 'w:p'?: unknown } };
+  };
+  const body = parsed['w:document']?.['w:body'];
+  if (!body) return [];
+  const raw = body['w:p'];
+  const paragraphs = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  return paragraphs
+    .map(paragraphText)
+    .filter((text): text is string => Boolean(text && text.trim()));
+}
+
+/** Every `w:t` inside one paragraph, joined. */
+function paragraphText(paragraph: unknown): string {
+  const texts: string[] = [];
+  const collect = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return;
+    const record = node as Record<string, unknown>;
+    const text = record['w:t'];
+    if (typeof text === 'string') {
+      texts.push(text);
+    } else if (Array.isArray(text)) {
+      // fast-xml-parser emits repeated `w:t` elements as an array.
+      for (const piece of text) {
+        if (typeof piece === 'string') texts.push(piece);
+        else if (piece && typeof piece === 'object' && '#text' in piece) {
+          texts.push(String((piece as { '#text': unknown })['#text']));
+        }
+      }
+    } else if (text && typeof text === 'object' && '#text' in text) {
+      texts.push(String((text as { '#text': unknown })['#text']));
+    }
+    for (const [key, value] of Object.entries(record)) {
+      if (key === 'w:t') continue;
+      if (Array.isArray(value)) value.forEach(collect);
+      else if (value && typeof value === 'object') collect(value);
+    }
+  };
+  collect(paragraph);
+  return texts.join('');
 }
 
 /**

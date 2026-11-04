@@ -113,7 +113,7 @@ test('rejects tables without header columns', async () => {
         content: [{ type: 'table', caption: 'Empty', headers: [], data: [] }],
       }],
     },
-  }), /must define at least one header column/);
+  }), /must define at least one column/);
 });
 
 test('rejects table column width counts that do not match headers', async () => {
@@ -126,7 +126,7 @@ test('rejects table column width counts that do not match headers', async () => 
         content: [{ type: 'table', caption: 'Widths', headers: ['A', 'B'], data: [], columnWidths: [1000] }],
       }],
     },
-  }), /2 columns but 1 column widths/);
+  }), /columnWidths has 1 entries but the table declares 2 columns/);
 });
 
 test('writes configured multi-column sections to OOXML', async () => {
@@ -979,11 +979,11 @@ test('renders inline LaTeX math as native Office Math (OMML) within paragraphs',
 
 // ── Regression: the fixes from the follow-up audit ───────────
 
-test('a table with no caption renders instead of throwing', async () => {
+test('a table with no caption is refused with a clear message', async () => {
   // `captionText` used `.trim()` on an undefined caption, so a document that
-  // skipped `validateDocument` killed the build with
-  // `Cannot read properties of undefined (reading 'trim')`.
-  const buffer = await renderDocument({
+  // skipped validation killed the build with a TypeError. The renderer validates
+  // first now, so the caller gets a message that names the field.
+  await assert.rejects(() => renderDocument({
     template,
     document: {
       type: 'thesis', meta: { title: 'No caption' }, cover: [],
@@ -992,9 +992,7 @@ test('a table with no caption renders instead of throwing', async () => {
         content: [{ type: 'table', headers: ['A', 'B'], data: [['1', '2']] }],
       }],
     },
-  });
-  const { xml } = await documentXml(buffer);
-  assert.match(xml, /<w:t[^>]*>1<\/w:t>/);
+  }), /caption/);
 });
 
 test('the emitted package is deflate-compressed, not stored', async () => {
@@ -1306,34 +1304,23 @@ test('the font guard leaves fonts the template declares alone', async () => {
   assert.match(toc1, /w:eastAsia="Arial"/);
 });
 
-test('a table row with the wrong cell count warns instead of padding in silence', async () => {
-  // `validateDocument` reports the mismatch, but a caller using the renderer
-  // directly got a silently padded or truncated row.
-  const warnings = [];
-  const original = console.warn;
-  console.warn = (message) => warnings.push(String(message));
-  try {
-    await renderDocument({
-      template,
-      document: {
-        type: 'thesis', meta: { title: 'Rows' }, cover: [],
-        sections: [{
-          id: 'c1', type: 'chapter', title: 'Chapter',
-          content: [{
-            type: 'table', caption: '短行', headers: ['A', 'B'],
-            data: [['only one'], ['1', '2', 'extra']],
-          }],
+test('a table row with the wrong cell count is rejected, not padded in silence', async () => {
+  // The renderer used to pad or truncate a short or long row with only a warning
+  // on the console. A caller that used the library directly saw nothing; the
+  // document just came out wrong. The validator refuses it now, naming the rows.
+  await assert.rejects(() => renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Rows' }, cover: [],
+      sections: [{
+        id: 'c1', type: 'chapter', title: 'Chapter',
+        content: [{
+          type: 'table', caption: '短行', headers: ['A', 'B'],
+          data: [['only one'], ['1', '2', 'extra']],
         }],
-      },
-    });
-  } finally {
-    console.warn = original;
-  }
-
-  const short = warnings.find(w => w.includes('row 1') && w.includes('Missing cells'));
-  const long = warnings.find(w => w.includes('row 2') && w.includes('Extra cells'));
-  assert.ok(short, `expected a missing-cells warning, got: ${JSON.stringify(warnings)}`);
-  assert.ok(long, `expected a dropped-cells warning, got: ${JSON.stringify(warnings)}`);
+      }],
+    },
+  }), /has 1 cell but the table declares 2 columns/);
 });
 
 test('a spacer can be an exact height, so a cover gap is a measurement', async () => {
@@ -2484,17 +2471,124 @@ test('a journal citation is indexed like a thesis one', async () => {
   assert.match(xml, /<w:vertAlign w:val="superscript"\/>[\s\S]{0,200}?<w:t[^>]*>\[1\]<\/w:t>/);
 });
 
-test('an author with no affiliations renders instead of throwing', async () => {
-  // The validator reports a missing affiliation; the renderer must not turn it
-  // into a TypeError on the way to that report.
-  const buffer = await renderDocument({
+test('an author with no affiliations is refused with a clear message', async () => {
+  // `author.affiliations.forEach` threw a TypeError; the validator names the
+  // missing field instead.
+  await assert.rejects(() => renderDocument({
     template,
     document: {
       type: 'journal',
       meta: { title: 'T', authors: [{ name: 'A' }] },
       sections: [{ id: 's', type: 'introduction', title: 'Introduction', content: [{ type: 'paragraph', text: 'x' }] }],
     },
+  }), /affiliations/);
+});
+
+// ── A journal template states its requirements ────────────
+
+test('a journal template states its title and abstract limits, and they are read', async () => {
+  // The template is an instruction sheet: `Title: [Max. 20 words]`,
+  // `Abstract: [Max. 200 words]`. Layout alone does not satisfy those.
+  const templateWithRequirements = structuredClone(template);
+  templateWithRequirements.requirements = { maxTitleWords: 5, maxAbstractWords: 10, minKeywords: 3 };
+  const buffer = await renderDocument({
+    template: templateWithRequirements,
+    document: {
+      type: 'journal',
+      meta: {
+        title: 'A title that runs well past the limit the journal states',
+        authors: [{ name: 'A', affiliations: [] }],
+        abstract: 'one two three four five six seven eight nine ten eleven twelve',
+        keywords: ['a', 'b'],
+      },
+      sections: [{ id: 's', type: 'introduction', title: 'Introduction', content: [{ type: 'paragraph', text: 'x' }] }],
+    },
   });
   const { xml } = await documentXml(buffer);
-  assert.match(xml, /A<\/w:t>/);
+  // The document still renders; the requirement is reported, not enforced by
+  // silently truncating the author's words.
+  assert.ok(xml.includes('A title that runs well past'), 'the title is printed as written');
+});
+
+test('an unmet requirement is reported, and the document still renders', async () => {
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  let rendered;
+  try {
+    const templateWithRequirements = structuredClone(template);
+    templateWithRequirements.requirements = { maxTitleWords: 3, minKeywords: 4 };
+    rendered = await renderDocument({
+      template: templateWithRequirements,
+      document: {
+        type: 'journal',
+        meta: { title: 'a b c d e f', authors: [{ name: 'A', affiliations: [] }], keywords: ['a', 'b'] },
+        sections: [{ id: 's', type: 'introduction', title: 'Introduction', content: [{ type: 'paragraph', text: 'x' }] }],
+      },
+    });
+  } finally {
+    console.warn = original;
+  }
+  assert.ok(rendered.length > 0, 'the document is still produced');
+  assert.ok(warnings.some(w => w.includes('meta.title') && w.includes('at most 3 words')), `got ${JSON.stringify(warnings)}`);
+  assert.ok(warnings.some(w => w.includes('meta.keywords') && w.includes('at least 4')), `got ${JSON.stringify(warnings)}`);
+});
+
+test('a missing section the journal expects is reported', async () => {
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const templateWithRequirements = structuredClone(template);
+    templateWithRequirements.requirements = { requiredSections: ['Build Instructions'] };
+    await renderDocument({
+      template: templateWithRequirements,
+      document: {
+        type: 'journal',
+        meta: { title: 'T', authors: [{ name: 'A', affiliations: [] }] },
+        sections: [{ id: 's', type: 'introduction', title: 'Introduction', content: [{ type: 'paragraph', text: 'x' }] }],
+      },
+    });
+  } finally {
+    console.warn = original;
+  }
+  assert.ok(warnings.some(w => w.includes('Build Instructions')), `got ${JSON.stringify(warnings)}`);
+});
+
+test('a journal Specifications table renders without a header row', async () => {
+  // HardwareX's table is a label on the left and the value on the right; it has
+  // no column names, so it must not grow one.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'journal',
+      meta: { title: 'T', authors: [{ name: 'A', affiliations: [] }] },
+      sections: [{ id: 's', type: 'introduction', title: 'Introduction', content: [{ type: 'paragraph', text: 'x' }] }],
+      specifications: [
+        { label: 'Hardware name', value: 'OpenTurbidity' },
+        { label: 'Cost of Hardware', value: 'USD 18' },
+      ],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /Hardware name/);
+  assert.match(xml, /OpenTurbidity/);
+  // No `<w:tblHeader/>`: that is what marks a header row.
+  const specsTable = xml.match(/<w:tbl>(?:(?!<\/w:tbl>)[\s\S])*?OpenTurbidity(?:(?!<\/w:tbl>)[\s\S])*?<\/w:tbl>/)?.[0] ?? '';
+  assert.ok(specsTable, 'the specifications table should be present');
+  assert.doesNotMatch(specsTable, /<w:tblHeader\/>/, 'a label/value table has no header row');
+});
+
+test('a table with some columns named and some blank is rejected', async () => {
+  // Either name every column or leave them all empty; a half-named table has no
+  // sensible layout.
+  await assert.rejects(() => renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Half' }, cover: [],
+      sections: [{ id: 't', type: 'chapter', title: 'T', content: [
+        { type: 'table', caption: 'Half', headers: ['Named', ''], data: [['1', '2']] },
+      ] }],
+    },
+  }), /headers/);
 });

@@ -990,3 +990,64 @@ Figure 1 Pipeline overview
 ```
 
 `pnpm check`: 216 tests, all passing.
+
+---
+
+## 23. What the journal template actually says it wants
+
+Rendering an Elsevier paper was half-done because it only reproduced layout. The
+journal's real requirements were never read, and the renderer never checked them.
+
+### The template is the spec
+
+HardwareX publishes a fill-in template rather than a style table. Its body text is
+the requirements document:
+
+```
+Title:    [Max. 20 words. …]
+Abstract: [Max. 200 words. …]
+Keywords: [At least 3 keywords. …]
+Specifications table  → Hardware name / Subject area / Hardware type / …
+Hardware in context → Design files → Bill of Materials → Build → Operation → Validation
+```
+
+`parseTemplate` reads those out of the template's own paragraphs and stores them on
+`DocumentTemplate.requirements`. Against the official HardwareX template it finds
+`maxTitleWords: 20`, `maxAbstractWords: 200`, and the sections `Hardware in context`,
+`Design files`, `Bill of Materials`.
+
+### Then the content is checked against them
+
+`renderDocument` reports every unmet requirement before it builds anything — the
+title over the limit, too few keywords, a section the journal expects and the
+manuscript does not have. It reports and never edits: an over-long title is the
+author's to shorten.
+
+### The Specifications table
+
+HardwareX opens with a fixed label/value table. The content supplies the values:
+
+```json
+"specifications": [
+  { "label": "Hardware name", "value": "OpenTurbidity" },
+  { "label": "Subject area", "value": "Environmental, Planetary and Agricultural Sciences" }
+]
+```
+
+It renders without a header row, because the journal's table has none. That needed a
+`headerless` table path: a table whose columns are all unnamed is a label/value
+table, and one with only *some* columns unnamed is still refused.
+
+### Gaps the validation exposed
+
+Turning validation on inside `renderDocument` (it used to run only in the CLI) found
+that the schema had drifted from the code:
+
+| Gap | Status |
+|---|---|
+| `nomenclature` was a valid section type in the renderer but not in the validator | Added |
+| A chapter subsection (`section`) was rejected as a section type | Added with `subsection`, `subsubsection` |
+| `Reference.text` was required, so every GB/T structured entry failed | `text` or `title`/`authors` |
+| Reference kinds were the old list | The GB/T 7714 kinds |
+
+`pnpm check`: 221 tests, all passing.
