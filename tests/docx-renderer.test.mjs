@@ -45,7 +45,11 @@ test('renders real list, code, quote and figure blocks with a caption', async ()
   assert.match(xml, /const x = 1;/);
   assert.match(xml, /Quoted text/);
   // One space between the number and the title; the old renderer emitted two.
-  assert.match(xml, /1 Figure caption/);
+  // The number is its own run now, wrapped in a bookmark so a `[[图1]]`
+  // reference in the body can point at it — the text still reads the same.
+  assert.match(xml, /<w:t xml:space="preserve">1<\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve"> Figure caption<\/w:t>/);
+  assert.match(xml, /<w:bookmarkStart[^>]*w:name="_Ref1"/);
   assert.doesNotMatch(xml, /1 {2}Figure caption/);
   assert.doesNotMatch(xml, /\[list_item:|\[code_block:|\[blockquote:/);
   const relationships = await zip.file('word/_rels/document.xml.rels').async('string');
@@ -1449,4 +1453,94 @@ test('renders a document with each real-world template', async () => {
     const pageWidth = template.page.width - template.page.margins.left - template.page.margins.right;
     assert.ok(tableWidth > 0 && tableWidth <= pageWidth + 2, `${name}: table width ${tableWidth} exceeds the printable ${pageWidth}`);
   }
+});
+
+// ── Template table/image format and caption cross-references ──
+
+test('a table takes its borders from the template that declares them', async () => {
+  // The renderer hardcoded one border shape, so every template produced the same
+  // table. These two fixtures genuinely disagree: 大连海事 draws 1.5 pt rules,
+  // 中国科技期刊研究 draws 0.5 pt, Elsevier draws a full grid.
+  const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'templates');
+  const doc = {
+    type: 'thesis', meta: { title: 'Borders', degree: 'master', date: '2026' }, cover: [],
+    sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+      { type: 'table', caption: 'T', headers: ['A', 'B'], data: [['1', '2']] },
+    ] }],
+  };
+
+  const expected = {
+    'cn-dlmu-thesis.docx': { top: '12', grid: false },
+    'cn-cjstp.docx': { top: '4', grid: false },
+    'elsevier-hardwarex.docx': { top: '4', grid: true },
+  };
+
+  for (const [name, want] of Object.entries(expected)) {
+    const template = await parseTemplate(readFileSync(join(fixtureDir, name)), { documentType: 'thesis' });
+    const buffer = await renderDocument({ template, document: doc });
+    const { xml } = await documentXml(buffer);
+    const borders = xml.match(/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/)?.[0] ?? '';
+
+    assert.match(borders, new RegExp(`<w:top w:val="single" w:color="000000" w:sz="${want.top}"`), `${name}: top rule`);
+    if (want.grid) {
+      assert.match(borders, /<w:insideV w:val="single"/, `${name}: expected a full grid`);
+    } else {
+      assert.doesNotMatch(borders, /<w:insideV w:val="single"/, `${name}: expected no vertical rules`);
+    }
+  }
+});
+
+test('the parser records the table and figure format a template declares', async () => {
+  const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'templates');
+  const cjstp = await parseTemplate(readFileSync(join(fixtureDir, 'cn-cjstp.docx')), { documentType: 'thesis' });
+  assert.equal(cjstp.tableFormat.borders.top.size, 4);
+  assert.equal(cjstp.tableFormat.alignment, 'center');
+  assert.deepEqual(cjstp.tableFormat.columnWidths?.slice(0, 2), [1704, 1704]);
+  assert.equal(cjstp.imageFormat.placement, 'inline');
+
+  const hardwarex = await parseTemplate(readFileSync(join(fixtureDir, 'elsevier-hardwarex.docx')), { documentType: 'thesis' });
+  assert.equal(hardwarex.tableFormat.borders.insideV.style, 'single');
+});
+
+test('a [[表3-1]] in the body becomes a REF field pointing at the caption bookmark', async () => {
+  // Typing 如表3-1所示 makes the number plain text: insert a table and the
+  // sentence is wrong. The standard mechanism is a REF field over a bookmark on
+  // the caption, which Word recomputes.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Refs', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'paragraph', text: '如[[表3-1]]所示。' },
+        { type: 'table', caption: '参数一览', number: '表3-1', headers: ['A', 'B'], data: [['1', '2']] },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+
+  const bookmark = xml.match(/<w:bookmarkStart[^>]*w:name="([^"]+)"/)?.[1];
+  const target = xml.match(/<w:fldSimple w:instr=" REF ([^ \\"]+)/)?.[1];
+  assert.ok(bookmark, 'expected a caption bookmark');
+  assert.ok(target, 'expected a REF field');
+  assert.equal(bookmark, target, 'the field must point at the bookmark the caption created');
+
+  // A viewer that does not evaluate fields still shows the number.
+  const fallback = xml.match(/<w:fldSimple[\s\S]*?<\/w:fldSimple>/)?.[0].replace(/<[^>]+>/g, '');
+  assert.equal(fallback, '表3-1');
+});
+
+test('a longhand caption number is left as text, not converted to a field', async () => {
+  // A manuscript that writes 如表3-1所示 itself keeps working exactly as before.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Plain', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'paragraph', text: '如表3-1所示。' },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.doesNotMatch(xml, /<w:fldSimple/);
+  assert.match(xml, /如表3-1所示。/);
 });

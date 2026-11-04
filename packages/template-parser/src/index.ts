@@ -17,6 +17,9 @@ import type {
   LineSpacingRule,
   RunningHeadSlots,
   StyleRole,
+  BorderSpec,
+  TableFormat,
+  ImageFormat,
   TemplateNumbering,
   TemplateNumberingLevel,
   BlockType,
@@ -99,6 +102,8 @@ export async function parseTemplate(
   // counter used to scan the *raw* string for `<w:pStyle`, which found nothing
   // in a document bound to another prefix. Both readers now see one tree.
   const parsedDocument = docXml ? parser.parse(normalizeWordPrefix(docXml)) : undefined;
+  const format = readTableAndImageFormat(parsedDocument);
+
   const pageSections = parsedDocument
     ? extractPageSections(parsedDocument, runningHeads, documentSettings)
     : [];
@@ -146,7 +151,122 @@ export async function parseTemplate(
     styleInheritance: buildInheritanceMap(rawStyles),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(numbering.length > 0 ? { numbering } : {}),
+    ...(format.tableFormat ? { tableFormat: format.tableFormat } : {}),
+    ...(format.imageFormat ? { imageFormat: format.imageFormat } : {}),
   };
+}
+
+/**
+ * The table and figure formatting a template actually declares.
+ *
+ * Templates disagree here far more than they do about styles: a Chinese
+ * journal draws three rules at 0.5 pt, a university thesis draws 1.5 pt top and
+ * bottom with a 0.75 pt header rule, an Elsevier template draws a full grid.
+ * None of it was read before — the renderer hardcoded one shape — so every
+ * template produced the same table.
+ *
+ * Only the *first* table and the *first* drawing are read. A template's later
+ * tables are variations (a matrix, a parameter list) rather than the format a
+ * document's own tables should inherit.
+ */
+function readTableAndImageFormat(
+  document: any,
+): { tableFormat?: TableFormat; imageFormat?: ImageFormat } {
+  const result: { tableFormat?: TableFormat; imageFormat?: ImageFormat } = {};
+
+  const body = firstElement(document?.['w:document']?.['w:body']);
+  if (!body) return result;
+
+  // ── Tables ──
+  const firstTable = asArray(body['w:tbl'])[0];
+  if (firstTable) {
+    const tblPr = firstElement(firstTable['w:tblPr']);
+    const format: TableFormat = {};
+
+    const borders = firstElement(tblPr?.['w:tblBorders']);
+    if (borders) {
+      const spec = (value: any): BorderSpec | undefined => {
+        const element = firstElement(value);
+        if (!element) return undefined;
+        const size = parseInt(element['@_w:sz']);
+        return {
+          style: String(element['@_w:val'] ?? 'single'),
+          size: isNaN(size) ? 4 : size,
+          color: String(element['@_w:color'] ?? 'auto'),
+        };
+      };
+      format.borders = {
+        top: spec(borders['w:top']),
+        bottom: spec(borders['w:bottom']),
+        left: spec(borders['w:left']),
+        right: spec(borders['w:right']),
+        insideH: spec(borders['w:insideH']),
+        insideV: spec(borders['w:insideV']),
+      };
+    }
+
+    const jc = tblPr?.['w:jc']?.['@_w:val'];
+    if (jc === 'center' || jc === 'left' || jc === 'right') format.alignment = jc;
+    const layout = tblPr?.['w:tblLayout']?.['@_w:type'];
+    if (layout) format.layout = String(layout);
+
+    const grid = firstElement(firstTable['w:tblGrid']);
+    if (grid) {
+      const widths = asArray(grid['w:gridCol'])
+        .map(column => parseInt(column?.['@_w:w']))
+        .filter((width): width is number => !isNaN(width));
+      if (widths.length > 0) format.columnWidths = widths;
+    }
+
+    // A header cell's own shading and run size, from the first row.
+    const firstRow = firstElement(firstTable['w:tr']);
+    const firstCell = firstElement(firstRow?.['w:tc']);
+    const cellPr = firstElement(firstCell?.['w:tcPr']);
+    const fill = cellPr?.['w:shd']?.['@_w:fill'];
+    if (fill && fill !== 'auto') format.headerFill = String(fill);
+    const cellRun = firstElement(cellPr?.['w:rPr']) ?? firstElement(firstCell?.['w:p']?.['w:r']?.['w:rPr']);
+    const size = parseInt(cellRun?.['w:sz']?.['@_w:val']);
+    if (!isNaN(size)) format.headerSize = size;
+    if (cellRun?.['w:b'] !== undefined) format.headerBold = flagOn(cellRun['w:b']);
+
+    if (Object.keys(format).length > 0) result.tableFormat = format;
+  }
+
+  // ── Figures ──
+  const drawing = findFirst(body, 'w:drawing');
+  if (drawing) {
+    const inline = findFirst(drawing, 'wp:inline');
+    const anchor = findFirst(drawing, 'wp:anchor');
+    const extent = findFirst(inline ?? anchor, 'wp:extent');
+    const cx = parseInt(extent?.['@_cx']);
+    const cy = parseInt(extent?.['@_cy']);
+    const format: ImageFormat = {
+      placement: anchor ? 'anchor' : 'inline',
+      ...(isNaN(cx) ? {} : { widthEmu: cx }),
+      ...(isNaN(cy) ? {} : { heightEmu: cy }),
+    };
+    result.imageFormat = format;
+  }
+
+  return result;
+}
+
+/** The first node stored under one tag, searched depth-first. */
+function findFirst(node: any, tag: string): any {
+  if (!node || typeof node !== 'object') return undefined;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = findFirst(item, tag);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  for (const [key, value] of Object.entries(node)) {
+    if (key === tag) return firstElement(value);
+    const found = findFirst(value, tag);
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 /**

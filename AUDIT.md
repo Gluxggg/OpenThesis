@@ -464,3 +464,66 @@ Eight local `.docx` files were also parsed as a cross-check — three OpenThesis
 outputs and five 博导申请 forms — and every one parsed without throwing.
 
 `pnpm check`: 166 tests, all passing.
+
+---
+
+## 12. Table and figure formatting, and caption cross-references
+
+Two questions from the owner: does the engine read a template's **table and
+figure formatting**, and do **表题/图题** follow a standard citation form?
+
+### What was actually true before this round
+
+| Area | Before | Now |
+|---|---|---|
+| Table borders | The template parser read **no** table XML at all. The renderer hardcoded one shape — 1.5 pt outer rules, 0.75 pt header rule, no verticals — so every template produced the same table. | The template's `w:tblBorders`, `w:jc`, `w:tblLayout`, `w:gridCol` widths, header `w:shd` fill and header run size are parsed into `TableFormat` and drive the output |
+| Figure format | Nothing was read. Every figure was centred at a width clamped to the printable area. | `ImageFormat` records `w:jc`, `wp:inline` vs `wp:anchor`, and the first drawing's EMU extent |
+| Caption format | 编号 + one space + 题名, centred, with the caption role's 段前/段后 — already correct | Unchanged in text, but the number now sits inside a **bookmark** |
+| Cross-references | `如表3-1所示` was plain text. Insert a table, renumber, and the sentence is wrong. | `[[表3-1]]` / `[[图2-1]]` become a `REF` field pointing at that bookmark |
+
+### What the four fixtures declare, and what comes out
+
+```
+template                 top-rule  grid   (source)
+acm-journal.docx              12   no     no table in the document body
+cn-cjstp.docx                  4   no     0.5 pt three-rule
+cn-dlmu-thesis.docx           12   no     1.5 pt top/bottom
+elsevier-hardwarex.docx        4   yes    full 0.5 pt grid
+```
+
+`acm-journal.docx` declares no table of its own, so it keeps the built-in shape —
+which is the correct reading, not a miss.
+
+### The cross-reference mechanism
+
+A caption's number is wrapped in a `w:bookmarkStart` / `w:bookmarkEnd` pair; the
+body's `[[表3-1]]` becomes a `w:fldSimple` with `w:instr=" REF _Ref表31 \h "`. Word
+recomputes the field, so the sentence follows the caption.
+
+Two details that matter:
+
+- The field carries a **fallback result** in its run. A viewer that does not
+  evaluate fields still shows `表3-1` rather than an empty gap.
+- The bookmark name is derived from the label alone (`_Ref表31`), and the field
+  derives it from the same function. The first attempt passed the kind separately
+  and produced `_Ref表表31` on the caption against `_Ref31` in the field — a
+  reference that silently points nowhere. The test asserts the two are **equal**,
+  not merely present.
+
+A manuscript that writes the number out longhand is left exactly as it was; only
+the `[[…]]` form becomes a field. Both are pinned by tests.
+
+### Two library details worth recording
+
+`docx` 9.7.1 has no wrapper for `bookmarkStart` or `fldSimple`, so the renderer
+constructs them through `XmlComponent`'s raw `root` convention: `['', { _attr },
+text]`. Two traps:
+
+- The attribute bag takes an object, but **a third slot of `''` emits
+  `<w:t></w:t>`** — a text element with no text. An element that should be
+  self-closing must pass no third slot at all.
+- `XmlComponent` is a **value** import, not a type-only one, and its `root` is
+  `protected` — a subclass has to `declare` it with the base class's exact type
+  or TypeScript rejects the assignment.
+
+`pnpm check`: 170 tests, all passing.

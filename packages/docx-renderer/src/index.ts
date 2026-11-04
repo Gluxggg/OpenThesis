@@ -10,6 +10,7 @@ import {
   Header, Footer, PageNumber, PageBreak,
   AlignmentType,
   BorderStyle, WidthType, ShadingType, LevelFormat,
+  XmlComponent,
   convertMillimetersToTwip, Packer, LineRuleType, PageOrientation,
   ImageRun,
   Math as DocxMath, MathRun, MathFraction, MathRadical, MathSuperScript,
@@ -37,6 +38,7 @@ import type {
   StyleRole,
   LegacyDocumentJSON,
   SpacerBlock,
+  BorderSpec,
   OpenThesisDocument,
   HeadingBlock,
   ParagraphBlock,
@@ -750,29 +752,41 @@ function styledRuns(
   style: ParagraphStyle,
   forceBold?: boolean,
   customSize?: number,
-): (TextRun | DocxMath)[] {
-  if (!text.includes('$')) {
+): (TextRun | DocxMath | XmlComponent)[] {
+  const hasMath = text.includes('$');
+  CROSS_REF.lastIndex = 0;
+  const hasRef = CROSS_REF.test(text);
+  CROSS_REF.lastIndex = 0;
+  if (!hasMath && !hasRef) {
     return [styledRun(text, style, forceBold, customSize)];
   }
 
-  const runs: (TextRun | DocxMath)[] = [];
-  // Match inline math $...$ that does not span newlines and is not escaped by \$
-  const regex = /(?<!\\)\$(?!\s)([^$\n]+?)(?<![\s\\])\$/g;
+  // One pass, cutting at whichever marker comes first: an inline `$…$` equation
+  // or a `[[表3-1]]` cross-reference. A reference inside a sentence must not
+  // disturb the runs around it, so both are handled in the same scan.
+  const runs: (TextRun | DocxMath | XmlComponent)[] = [];
+  const mathSource = '\\$(?!\\s)([^$\\n]+?)(?<![\\s\\\\])\\$';
+  const pattern = new RegExp(`${mathSource}|\\[\\[(表|图)\\s*([^\\[\\]]+?)\\]\\]`, 'g');
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  while ((match = regex.exec(text)) !== null) {
+  while ((match = pattern.exec(text)) !== null) {
     if (match.index > lastIndex) {
       runs.push(styledRun(text.slice(lastIndex, match.index), style, forceBold, customSize));
     }
-    const mathLatex = match[1].trim();
-    try {
-      const ast = latexToMathAst(mathLatex);
-      runs.push(new DocxMath({ children: mathComponents(ast) }));
-    } catch {
-      runs.push(styledRun(`$${mathLatex}$`, style, forceBold, customSize));
+
+    if (match[2]) {
+      runs.push(crossReferenceField(`${match[2]}${match[3].trim()}`));
+    } else {
+      const mathLatex = match[1].trim();
+      try {
+        const ast = latexToMathAst(mathLatex);
+        runs.push(new DocxMath({ children: mathComponents(ast) }));
+      } catch {
+        runs.push(styledRun(`$${mathLatex}$`, style, forceBold, customSize));
+      }
     }
-    lastIndex = regex.lastIndex;
+    lastIndex = pattern.lastIndex;
   }
 
   if (lastIndex < text.length) {
@@ -855,18 +869,49 @@ function renderTable(
   const showGrid = !isThreeLine && block.showGridlines !== false;
   const showShading = isThreeLine ? block.headerShading === true : block.headerShading !== false;
 
-  const BO = { style: BorderStyle.SINGLE, size: 12, color: '000000' };
-  const BI = { style: BorderStyle.SINGLE, size: 6, color: '000000' };
+  // The template's own strokes, when it declared any. `w:sz` is in eighths of a
+  // point, which is what the writer library's `size` means too, so the value
+  // passes through unchanged. A template that declares nothing keeps the old
+  // shape: 1.5 pt outer rules, 0.75 pt header rule, nothing inside.
+  const declared = template.tableFormat?.borders;
+  type BorderShape = { style: (typeof BorderStyle)[keyof typeof BorderStyle]; size: number; color: string };
+  const toBorder = (spec: BorderSpec | undefined, fallback: BorderShape): BorderShape =>
+    spec && spec.style !== 'none' && spec.style !== 'nil'
+      ? { style: borderStyleOf(spec.style), size: spec.size, color: spec.color === 'auto' ? '000000' : spec.color }
+      : fallback;
+  const BO = toBorder(declared?.top, { style: BorderStyle.SINGLE, size: 12, color: '000000' });
+  const BI = toBorder(declared?.insideH, { style: BorderStyle.SINGLE, size: 6, color: '000000' });
+  const BLeft = toBorder(declared?.left, { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' });
+  const BRight = toBorder(declared?.right, { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' });
+  const BBottom = toBorder(declared?.bottom, BO);
+  const BInsideV = toBorder(declared?.insideV, { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' });
   const NO = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+
+  // When the template draws a full grid, that is the format — the academic
+  // three-line default only applies to a template that did not say otherwise.
+  const templateDrawsGrid = Boolean(declared?.insideV && declared.insideV.style !== 'none' && declared.insideV.style !== 'nil');
 
   // Caption. The role's own 段前/段后 are what reach `w:spacing`: hardcoding
   // 120/60 here overwrote the template's `ub` (150/50), which is why the
   // university's 段前1行 never appeared in the produced document.xml. A table with
   // no caption gets no empty paragraph carrying that 段前 spacing.
   const captionValue = captionText(block.number, block.caption);
+  // A caption's number is bookmarked, so a `[[表3-1]]` in the body becomes a
+  // REF field that Word keeps in step with the caption instead of a hand-typed
+  // number that goes stale the moment a table is inserted.
+  const captionBookmarkId = nextBookmarkId();
   const captionPara = captionValue
     ? new Paragraph({
-        children: styledRuns(captionValue, captionStyle, true),
+        children: [
+          ...(block.number
+            ? [
+                captionBookmarkStart(block.number, captionBookmarkId),
+                styledRun(block.number, captionStyle, true),
+                captionBookmarkEnd(captionBookmarkId),
+                styledRun(captionValue.slice(block.number.length), captionStyle, true),
+              ]
+            : styledRuns(captionValue, captionStyle, true)),
+        ],
         alignment: mapAlignment(captionStyle.paragraph.alignment),
         spacing: {
           before: captionStyle.paragraph.spaceBefore,
@@ -882,23 +927,38 @@ function renderTable(
     children: block.headers.map((h, ci) =>
       new TableCell({
         width: { size: colWidths[ci], type: WidthType.DXA },
-        borders: isThreeLine ? {
-          top: BO,
-          bottom: BI,
-          left: NO,
-          right: NO,
-        } : (showGrid ? {
-          top: BO,
-          bottom: BO,
-          left: ci === 0 ? BO : BI,
-          right: ci === colCount - 1 ? BO : BI,
-        } : {
-          top: NO, bottom: NO, left: NO, right: NO,
-        }),
-        shading: showShading ? { fill: 'D9D9D9', type: ShadingType.SOLID, color: 'auto' } : undefined,
+        borders: templateDrawsGrid
+          ? {
+              top: BO,
+              bottom: BI,
+              left: ci === 0 ? BLeft : BInsideV,
+              right: ci === colCount - 1 ? BRight : BInsideV,
+            }
+          : isThreeLine
+            ? { top: BO, bottom: BI, left: NO, right: NO }
+            : (showGrid
+              ? {
+                  top: BO,
+                  bottom: BO,
+                  left: ci === 0 ? BO : BI,
+                  right: ci === colCount - 1 ? BO : BI,
+                }
+              : { top: NO, bottom: NO, left: NO, right: NO }),
+        shading: showShading
+          ? {
+              fill: template.tableFormat?.headerFill ?? 'D9D9D9',
+              type: ShadingType.SOLID,
+              color: 'auto',
+            }
+          : undefined,
         children: [
           new Paragraph({
-            children: styledRuns(h, headerStyle, true),
+            children: styledRuns(
+              h,
+              headerStyle,
+              template.tableFormat?.headerBold ?? true,
+              template.tableFormat?.headerSize,
+            ),
             alignment: mapAlignment(headerStyle.paragraph.alignment),
             // `lineStyle` carries the template's `lineRule`. Passing `line`
             // alone dropped it, so an `exact` twips value was read as a multiple
@@ -966,16 +1026,32 @@ function renderTable(
     // Declare the same total the cells declare; a 100% table width alongside
     // absolute cell widths is contradictory OOXML.
     width: { size: tableWidth, type: WidthType.DXA },
-    borders: isThreeLine ? {
-      top: BO, bottom: BO, left: NO, right: NO,
-      insideHorizontal: NO, insideVertical: NO,
-    } : (showGrid ? {
-      top: BO, bottom: BO, left: BO, right: BO,
-      insideHorizontal: BI, insideVertical: BI,
-    } : {
-      top: NO, bottom: NO, left: NO, right: NO,
-      insideHorizontal: NO, insideVertical: NO,
-    }),
+    // The table-level borders are what a table with no per-cell override draws,
+    // so they have to agree with the cells: a template that draws a full grid
+    // gets its inside rules here too, not the academic three-line default.
+    borders: templateDrawsGrid
+      ? {
+          top: BO,
+          bottom: BBottom,
+          left: BLeft,
+          right: BRight,
+          insideHorizontal: BI,
+          insideVertical: BInsideV,
+        }
+      : isThreeLine
+        ? {
+            top: BO, bottom: BBottom, left: NO, right: NO,
+            insideHorizontal: NO, insideVertical: NO,
+          }
+        : (showGrid
+          ? {
+              top: BO, bottom: BBottom, left: BO, right: BO,
+              insideHorizontal: BI, insideVertical: BI,
+            }
+          : {
+              top: NO, bottom: NO, left: NO, right: NO,
+              insideHorizontal: NO, insideVertical: NO,
+            }),
     rows: [headerRow, ...dataRows],
   });
 
@@ -1121,7 +1197,16 @@ function renderFigure(
       // for 0.1 行). The run used to be `${number}  ${caption}` with two spaces and
       // a hardcoded 段后 120.
       const caption = new Paragraph({
-        children: styledRuns(captionText(block.number, block.caption), captionStyle),
+children: [
+          ...(block.number
+            ? [
+                captionBookmarkStart(block.number, nextBookmarkId()),
+                styledRun(block.number, captionStyle),
+                captionBookmarkEnd(bookmarkCounter),
+                styledRun(captionText(block.number, block.caption).slice(block.number.length), captionStyle),
+              ]
+            : styledRuns(captionText(block.number, block.caption), captionStyle)),
+        ],
         alignment: mapAlignment(captionStyle.paragraph.alignment),
         spacing: {
           before: captionStyle.paragraph.spaceBefore,
@@ -2407,6 +2492,7 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   // template between renders must see its own edit, and the cache is otherwise
   // keyed only by the template's identity.
   STYLE_CACHE.delete(template);
+  resetBookmarks();
 
   // Shared across the whole document so list numbering instances stay unique.
   const state = createRenderState();
@@ -2771,6 +2857,102 @@ function templateNumberingConfig(template: DocumentTemplate): INumberingOptions[
     });
   }
   return config;
+}
+
+/**
+ * Map an OOXML `w:val` border style to the writer library's enum.
+ *
+ * The two vocabularies are nearly identical; an unknown value falls back to a
+ * single rule rather than dropping the border, because a table that declared a
+ * border and got none reads as a broken template.
+ */
+function borderStyleOf(value: string): (typeof BorderStyle)[keyof typeof BorderStyle] {
+  const known = BorderStyle as unknown as Record<string, (typeof BorderStyle)[keyof typeof BorderStyle]>;
+  const candidate = value.charAt(0).toUpperCase() + value.slice(1);
+  return known[candidate] ?? BorderStyle.SINGLE;
+}
+
+/**
+/**
+ * A cross-reference to a caption, as Word understands one.
+ *
+ * Writing `如表3-1所示` into a paragraph makes the number plain text: renumber
+ * the table and the sentence is wrong. The standard mechanism is a `REF` field
+ * pointing at a bookmark around the caption's number, so Word recomputes it.
+ * The bookmark sits on the caption; the sentence carries the field.
+ *
+ * Markdown reaches this through `[[表3-1]]` / `[[图2-1]]`, which `styledRuns`
+ * turns into the field. A manuscript that writes the number out longhand keeps
+ * working exactly as before — its text is left alone.
+ */
+const CROSS_REF = /\[\[(表|图)\s*([^\[\]]+?)\]\]/g;
+
+/** The bookmark name a caption's number lives under. */
+function captionBookmark(label: string): string {
+  return `_Ref${label.replace(/[^0-9A-Za-z\u4e00-\u9fa5]/g, '')}`;
+}
+
+/**
+ * A raw OOXML element the writer library has no wrapper for.
+ *
+ * `XmlComponent`'s `root` follows the library's own convention: an optional
+ * prefix, then an attribute bag, then either a text payload or child elements.
+ * A string in the third slot is the element's text.
+ */
+class RawElement extends XmlComponent {
+  // The base class keeps `root` protected; this subclass assigns it.
+  declare protected root: (XmlComponent | string | any)[];
+
+  constructor(name: string, attributes: Record<string, string>, text?: string, children?: XmlComponent[]) {
+    super(name);
+    // Three cases, and the distinction matters: an element with children, an
+    // element with text, and a self-closing element. Passing `''` for the last
+    // one emits `<w:t></w:t>` — a text element with no text — which is not what
+    // a bookmark marker is.
+    this.root = children
+      ? (['', { _attr: attributes }, ...children] as (XmlComponent | string | any)[])
+      : text === undefined
+        ? (['', { _attr: attributes }] as (XmlComponent | string | any)[])
+        : (['', { _attr: attributes }, text] as (XmlComponent | string | any)[]);
+  }
+
+}
+/** A bookmark around the caption number, so a REF field can find it. */
+function captionBookmarkStart(label: string, id: number): XmlComponent {
+  return new RawElement('w:bookmarkStart', { 'w:id': String(id), 'w:name': captionBookmark(label) });
+}
+
+function captionBookmarkEnd(id: number): XmlComponent {
+  return new RawElement('w:bookmarkEnd', { 'w:id': String(id) });
+}
+
+/**
+ * A `REF` field that Word evaluates to the caption's number.
+ *
+ * Written as a `w:fldSimple` with the result in its run, so a viewer that does
+ * not evaluate fields still shows the number rather than an empty gap.
+ */
+function crossReferenceField(label: string): XmlComponent {
+  const instr = ` REF ${captionBookmark(label)} \\h `;
+  return new RawElement(
+    'w:fldSimple',
+    { 'w:instr': instr },
+    undefined,
+    [new RawElement('w:r', {}, undefined, [new RawElement('w:t', { 'xml:space': 'preserve' }, label)])],
+  );
+}
+
+let bookmarkCounter = 0;
+
+/** A fresh bookmark id. Word only needs them unique within the document. */
+function nextBookmarkId(): number {
+  bookmarkCounter += 1;
+  return bookmarkCounter;
+}
+
+/** Reset between renders, so two documents do not share a numbering. */
+function resetBookmarks(): void {
+  bookmarkCounter = 0;
 }
 
 // ── Utility ───────────────────────────────────────────────
