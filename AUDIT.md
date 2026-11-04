@@ -1051,3 +1051,53 @@ that the schema had drifted from the code:
 | Reference kinds were the old list | The GB/T 7714 kinds |
 
 `pnpm check`: 221 tests, all passing.
+
+---
+
+## 24. What the community does, and what was missing here
+
+The question was how other projects get a journal template to drive the output.
+The answer, from the three mature ones, is the same: **bind by style name**.
+
+| Project | Mechanism |
+|---|---|
+| Pandoc / Quarto | a `reference.docx` whose styles are named `Title`, `Author`, `Abstract`, `Caption`, `Bibliography`; content selects one with `custom-style` |
+| rticles | 43 journal formats, each a LaTeX or Word template plus the field mapping |
+| Manubot | pandoc plus a CSL style for the bibliography |
+
+Pandoc's own list of the styles it reads is the useful artefact:
+
+```
+Normal, Body Text, First Paragraph, Compact, Title, Subtitle, Author, Date,
+Abstract, Bibliography, Heading 1..6, Block Text, Footnote Text,
+Definition Term, Definition, Caption, Table Caption, Image Caption,
+Figure, Figure With Caption, TOC Heading
+```
+
+### What was missing
+
+The role detector knew Chinese thesis style names and nothing else. Against the
+ACM template it recognised **one** role (`paragraph`) out of twenty styles, so every
+journal front-matter element fell back to a built-in default.
+
+After adding the Pandoc names, the same template yields:
+
+```
+paragraph: Normal        heading1..6: Head1..Heading6
+journal_title: Title     journal_subtitle: Subtitle
+journal_author: Authors  journal_affiliation: Affiliation
+journal_abstract: Abstract   journal_keywords: KeyWords
+journal_date: Date       figure_caption: FigureCaption
+table_caption: TableCaption  reference_item: Bibliography
+```
+
+**One role became twenty.** The rendered ACM page now takes its title from the
+template's own Title style instead of a guess.
+
+### A two-column page needs a column-width rule
+
+ACM is two-column. Tables and equations sized themselves against the page, so a
+table ran through the column rule and off the edge of the paper. There is a
+`contentWidth()` helper now, and a table on a multi-column page fits one column.
+
+`pnpm check`: 223 tests, all passing.
