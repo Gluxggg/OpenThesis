@@ -654,3 +654,63 @@ body page 2              图2-1 with its caption, 表2-1 as a three-line table  
 ```
 
 `pnpm check`: 177 tests, all passing.
+
+---
+
+## 16. Captions that Word itself can renumber and cross-reference
+
+The captions looked right and were not Word captions. Word's Insert Caption writes
+`表` + a `SEQ Table` field, and its Cross-reference dialog lists a caption by
+**the SEQ identifier it can find**. This renderer wrote the finished number as
+plain text, so every caption was a picture of a caption: correct on the page,
+invisible to the dialog, and impossible to renumber.
+
+### What a caption is made of now
+
+```
+表 1 - 1 参数一览
+│  │   │  └─ literal title
+│  │   └──── SEQ Table \* ARABIC \s 1   ← the number Word renumbers
+│  └──────── literal chapter number
+└─────────── literal label
+```
+
+The `SEQ` field sits **inside** a bookmark named `_Ref…`, and every `[[表1-1]]`
+becomes a `REF _Ref… \h` field pointing at it — the same pairing Word produces,
+which is why the dialog finds them and `F9` recomputes them.
+
+| Piece | Before | Now |
+|---|---|---|
+| Caption number | plain text | `SEQ Table \* ARABIC \s 1` field |
+| Cross-reference | `w:fldSimple REF …`, result hardcoded | complex field, result materialised |
+| Bookmark | `_Ref表11`, around the text | `_Ref表11`, around the whole number field |
+| Heading outline level | none | chapter = `w:outlineLvl 0`, … |
+
+### Two traps found by rendering the result
+
+**STYLEREF does not work here.** Word's "Include chapter number" builds the chapter
+part as `STYLEREF 1 \s`. Emitting that produced **表Error: Reference source not
+found-1** on the page: `STYLEREF` reads the number a style generates, and these
+chapter titles carry `第一章` in their own text rather than generating it from a
+numbering definition. The chapter number is literal text; it is computed at build
+time and is right for the document as written.
+
+**`\s 1` needs an outline level.** Without `w:outlineLvl` on the headings, a
+`SEQ … \s 1` field has nothing to restart against and runs 1, 2, 3 across the
+whole document. Headings now declare it, and the rendering confirms chapter 2
+starts again at `表2-1` / `图2-1`.
+
+### Verified on a two-chapter document
+
+```
+chapter 1   表1-1, 图1-1, 表1-2, 图1-2                       renders, no field errors
+chapter 2   表2-1, 图2-1                                    the sequences restart
+body text   见[[图1-1]] / [[表2-1]]                          become REF fields, both resolve
+fields      3x SEQ Table, 3x SEQ Figure, 2x REF             every REF hits a real bookmark
+outline     0, 0                                            chapter headings are level 1
+```
+
+A number the author writes by hand is left as literal text and emits no `SEQ`
+field: renumbering it would contradict what they asked for.
+
+`pnpm check`: 181 tests, all passing.

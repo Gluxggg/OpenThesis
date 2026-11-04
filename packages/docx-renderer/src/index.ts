@@ -389,6 +389,17 @@ function indentOf(style: ParagraphStyle): { hanging?: number; left?: number; fir
 
 // ── Block Renderers ───────────────────────────────────────
 
+/** Outline level for a heading kind: chapter is level 1, so it is level 0 here. */
+function headingOutlineLevel(type: string): number {
+  switch (type) {
+    case 'chapter': return 0;
+    case 'section': return 1;
+    case 'subsection': return 2;
+    case 'subsubsection': return 3;
+    default: return 0;
+  }
+}
+
 function renderHeading(
   template: DocumentTemplate,
   block: HeadingBlock,
@@ -406,6 +417,9 @@ function renderHeading(
 
   const numberPrefix = block.number ? `${block.number}  ` : '';
   return new Paragraph({
+    // `STYLEREF` and a `SEQ … \s` field look the chapter number up by outline
+    // level, so a heading that declares none cannot be found by either.
+    outlineLevel: headingOutlineLevel(block.type),
     // A number written in the content file wins: the author asked for that
     // exact label. Otherwise the template's own numbering takes over, which is
     // how a guide that numbers chapters `1`, `1.1`, `2.3.3` gets honoured.
@@ -787,8 +801,8 @@ function styledRuns(
     }
 
     if (match[2]) {
-      const resolved = resolveReferenceLabel(`${match[2]}${match[3].trim()}`);
-      runs.push(resolved === undefined ? styledRun(`[[${match[2]}${match[3].trim()}]]`, style, forceBold, customSize) : crossReferenceField(resolved));
+      const resolved = resolveReference(`${match[2]}${match[3].trim()}`);
+      runs.push(resolved === undefined ? styledRun(`[[${match[2]}${match[3].trim()}]]`, style, forceBold, customSize) : crossReferenceField(resolved.bookmark, resolved.result));
     } else {
       const mathLatex = match[1].trim();
       try {
@@ -927,9 +941,7 @@ function renderTable(
         children: [
           ...(block.number
             ? [
-                captionBookmarkStart(block.number, captionBookmarkId),
-                styledRun(block.number, captionStyle, true),
-                captionBookmarkEnd(captionBookmarkId),
+                ...captionNumberRuns(captionIndex.entries.get(block.number)!, captionStyle, captionBookmarkId),
                 styledRun(captionValue.slice(block.number.length), captionStyle, true),
               ]
             : styledRuns(captionValue, captionStyle, true)),
@@ -1235,9 +1247,7 @@ function renderFigureGroup(
     children: [
       ...(block.number
         ? [
-            captionBookmarkStart(block.number, nextBookmarkId()),
-            styledRun(block.number, captionStyle),
-            captionBookmarkEnd(bookmarkCounter),
+            ...captionNumberRuns(captionIndex.entries.get(block.number)!, captionStyle, nextBookmarkId()),
             styledRun(captionText(block.number, block.caption).slice(block.number.length), captionStyle),
           ]
         : styledRuns(captionText(block.number, block.caption), captionStyle)),
@@ -1344,9 +1354,7 @@ function renderFigure(
 children: [
           ...(block.number
             ? [
-                captionBookmarkStart(block.number, nextBookmarkId()),
-                styledRun(block.number, captionStyle),
-                captionBookmarkEnd(bookmarkCounter),
+                ...captionNumberRuns(captionIndex.entries.get(block.number)!, captionStyle, nextBookmarkId()),
                 styledRun(captionText(block.number, block.caption).slice(block.number.length), captionStyle),
               ]
             : styledRuns(captionText(block.number, block.caption), captionStyle)),
@@ -1394,9 +1402,7 @@ children: [
     children: [
       ...(block.number
         ? [
-            captionBookmarkStart(block.number, nextBookmarkId()),
-            styledRun(block.number, captionStyle),
-            captionBookmarkEnd(bookmarkCounter),
+            ...captionNumberRuns(captionIndex.entries.get(block.number)!, captionStyle, nextBookmarkId()),
             styledRun(captionText(block.number, block.caption).slice(block.number.length), captionStyle),
           ]
         : styledRuns(captionText(block.number, block.caption), captionStyle)),
@@ -3096,9 +3102,22 @@ class RawElement extends XmlComponent {
   }
 
 }
-/** A bookmark around the caption number, so a REF field can find it. */
-function captionBookmarkStart(label: string, id: number): XmlComponent {
-  return new RawElement('w:bookmarkStart', { 'w:id': String(id), 'w:name': captionBookmark(label) });
+/**
+ * The caption label Word knows this figure or table by.
+ *
+ * A Word caption is a `SEQ` field whose identifier names the label — `SEQ Figure`
+ * for 图, `SEQ Table` for 表. Word's Insert Caption and Cross-reference dialogs
+ * only recognise a caption label that matches a SEQ identifier, so writing the
+ * number as a plain string (which is what this renderer did) produces text that
+ * looks right and cannot be referenced, renumbered, or listed.
+ */
+function captionSeqLabel(kind: '表' | '图'): string {
+  return kind === '表' ? 'Table' : 'Figure';
+}
+
+/** A bookmark around a caption's number, so a REF field can point at it. */
+function captionBookmarkStart(name: string, id: number): XmlComponent {
+  return new RawElement('w:bookmarkStart', { 'w:id': String(id), 'w:name': name });
 }
 
 function captionBookmarkEnd(id: number): XmlComponent {
@@ -3106,45 +3125,100 @@ function captionBookmarkEnd(id: number): XmlComponent {
 }
 
 /**
+ * A `SEQ` field: Word's own caption numbering.
+ *
+ * `\s 1` restarts the sequence at each heading of the given outline level, which
+ * is what makes 图 1-1 / 图 2-1 work without any chapter number written into the
+ * text. `\* ARABIC` asks for plain digits.
+ *
+ * The field carries a **materialised result**: viewers that do not evaluate
+ * fields (LibreOffice's renderer, some WPS builds) then show the number the
+ * renderer computed instead of a blank. Word recalculates it on update.
+ */
+function captionSeqField(kind: '表' | '图', result: string, restartAtHeading: boolean): XmlComponent {
+  const seq = captionSeqLabel(kind);
+  const instr = ` SEQ ${seq} \\* ARABIC${restartAtHeading ? ' \\s 1' : ''} `;
+  return new RawElement('w:r', {}, undefined, [
+    new RawElement('w:fldChar', { 'w:fldCharType': 'begin' }),
+    new RawElement('w:instrText', { 'xml:space': 'preserve' }, instr),
+    new RawElement('w:fldChar', { 'w:fldCharType': 'separate' }),
+    new RawElement('w:t', { 'xml:space': 'preserve' }, result),
+    new RawElement('w:fldChar', { 'w:fldCharType': 'end' }),
+  ]);
+}
+
+/**
+ * The runs that make up a caption's number, as Word builds one.
+ *
+ * `表` and `-` are literal text, the chapter number is literal, and the sequence is
+ * a `SEQ Table` field — the part Word actually renumbers. A caption the author
+ * numbered by hand keeps its literal text instead.
+ */
+function captionNumberRuns(
+  entry: CaptionEntry,
+  style: ParagraphStyle,
+  bookmarkId: number,
+): XmlComponent[] {
+  const runs: XmlComponent[] = [captionBookmarkStart(captionBookmark(entry.label), bookmarkId)];
+
+  if (entry.manual) {
+    // The author's own label, kept as text: a SEQ field here would renumber it.
+    runs.push(styledRun(entry.label, style, true));
+    runs.push(captionBookmarkEnd(bookmarkId));
+    return runs;
+  }
+
+  runs.push(styledRun(entry.kind, style, true));
+  if (entry.chapter > 0) {
+    // Literal, not a STYLEREF field: a heading's number exists as a field only
+    // when the heading is auto-numbered, and these titles carry theirs in their
+    // text, so a STYLEREF here renders as "Error: Reference source not found".
+    // The chapter number is computed at build time and is right for the document
+    // as written; the sequence within the chapter is what Word renumbers.
+    runs.push(styledRun(String(entry.chapter), style, true));
+    runs.push(styledRun('-', style, true));
+  }
+  runs.push(captionSeqField(entry.kind, String(entry.seq), entry.chapter > 0));
+  runs.push(captionBookmarkEnd(bookmarkId));
+  return runs;
+}
+
+/**
  * A `REF` field that Word evaluates to the caption's number.
  *
- * Written as a `w:fldSimple` with the result in its run, so a viewer that does
- * not evaluate fields still shows the number rather than an empty gap.
+ * `\h` makes the reference a hyperlink to the bookmark. The field carries the
+ * number as its result, so a viewer that does not evaluate fields still shows it
+ * rather than an empty gap.
  */
 /**
- * Turn a reference token into the label a caption actually carries.
+ * Turn a reference token into the caption bookmark it points at, plus the
+ * number to show as the field's result.
  *
  * `表#tab1` names a block by id, which is the form that survives automatic
- * numbering — the author cannot know that the table will become 表3-1. A literal
- * `表3-1` is taken at face value. Either way an unknown label is reported: a REF
- * field pointing at a bookmark that does not exist makes Word print
- * "Error! Reference source not found." and nothing said so before.
+ * numbering. A literal `表3-1` is taken at face value. An unknown label is
+ * reported: a REF field pointing at a bookmark that does not exist makes Word
+ * print "Error! Reference source not found."
  */
-function resolveReferenceLabel(raw: string): string | undefined {
+function resolveReference(raw: string): { bookmark: string; result: string } | undefined {
   const label = raw.trim();
-  if (label.includes('#')) {
-    const resolved = captionIndex.byId.get(label);
-    if (!resolved) {
-      console.warn(`Cross-reference to "${label}" matches no table or figure id; the reference will be left as text.`);
-      return undefined;
-    }
-    return resolved;
-  }
-  if (!captionIndex.labels.has(label)) {
+  const entry = label.includes('#')
+    ? captionIndex.byId.get(label)
+    : captionIndex.entries.get(label);
+  if (!entry) {
     console.warn(`Cross-reference to "${label}" matches no caption in this document; the reference will be left as text.`);
     return undefined;
   }
-  return label;
+  return { bookmark: captionBookmark(entry.label), result: entry.label };
 }
 
-function crossReferenceField(label: string): XmlComponent {
-  const instr = ` REF ${captionBookmark(label)} \\h `;
-  return new RawElement(
-    'w:fldSimple',
-    { 'w:instr': instr },
-    undefined,
-    [new RawElement('w:r', {}, undefined, [new RawElement('w:t', { 'xml:space': 'preserve' }, label)])],
-  );
+function crossReferenceField(bookmark: string, result: string): XmlComponent {
+  return new RawElement('w:r', {}, undefined, [
+    new RawElement('w:fldChar', { 'w:fldCharType': 'begin' }),
+    new RawElement('w:instrText', { 'xml:space': 'preserve' }, ` REF ${bookmark} \\h `),
+    new RawElement('w:fldChar', { 'w:fldCharType': 'separate' }),
+    new RawElement('w:t', { 'xml:space': 'preserve' }, result),
+    new RawElement('w:fldChar', { 'w:fldCharType': 'end' }),
+  ]);
 }
 
 let bookmarkCounter = 0;
@@ -3168,33 +3242,62 @@ function resetBookmarks(): void {
  * chapter, in document order — the standard 表1-1 / 图2-3 form — and a reference
  * can name either that label (`[[表1-1]]`) or the block's id (`[[表#tab1]]`).
  */
-interface CaptionIndex {
-  labels: Set<string>;
-  byId: Map<string, string>;
+/**
+ * Every caption in the document, and the structure Word needs to number it.
+ *
+ * A Word caption is not a string: it is `表` + a `STYLEREF` field for the chapter
+ * number + `-` + a `SEQ Table` field. That is what makes 图 2-1 both display
+ * correctly and stay updatable — and what makes it appear in Word's
+ * Cross-reference dialog at all. So the renderer records the parts, not just the
+ * finished label.
+ */
+interface CaptionEntry {
+  kind: '表' | '图';
+  chapter: number;
+  seq: number;
+  /** The label as it reads, e.g. `表2-1`. */
+  label: string;
+  /** True when the author wrote the number, so it is literal text, not a field. */
+  manual: boolean;
 }
 
-let captionIndex: CaptionIndex = { labels: new Set(), byId: new Map() };
+interface CaptionIndex {
+  entries: Map<string, CaptionEntry>;
+  byId: Map<string, CaptionEntry>;
+}
+
+let captionIndex: CaptionIndex = { entries: new Map(), byId: new Map() };
+
 
 
 function resetCaptionIndex(): void {
-  captionIndex = { labels: new Set(), byId: new Map() };
+  captionIndex = { entries: new Map(), byId: new Map() };
 }
 
 type NumberedBlock = { type?: string; number?: string; id?: string };
 
 /** Number every table and figure in one block list that brought no number. */
+/** Number every table and figure in one block list that brought no number. */
 function numberCaptions(blocks: NumberedBlock[], chapter: number, counters: Map<string, number>): void {
   for (const block of blocks) {
     const kind = block.type === 'table' ? '表' : block.type === 'figure' ? '图' : undefined;
     if (!kind) continue;
-    if (!block.number) {
-      const key = `${chapter}|${kind}`;
-      const seq = (counters.get(key) ?? 0) + 1;
-      counters.set(key, seq);
-      block.number = chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`;
-    }
-    captionIndex.labels.add(block.number);
-    if (block.id) captionIndex.byId.set(`${kind}#${block.id}`, block.number);
+
+    const key = `${chapter}|${kind}`;
+    const seq = (counters.get(key) ?? 0) + 1;
+    counters.set(key, seq);
+
+    // A number the author wrote wins and keeps its literal text: it is outside
+    // the sequence Word manages, so giving it a SEQ field would renumber it out
+    // from under them. Everything else is Word's to number.
+    const written = block.number;
+    const entry: CaptionEntry = written
+      ? { kind, chapter, seq, label: written, manual: true }
+      : { kind, chapter, seq, label: chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`, manual: false };
+    block.number = entry.label;
+
+    captionIndex.entries.set(entry.label, entry);
+    if (block.id) captionIndex.byId.set(`${kind}#${block.id}`, entry);
   }
 }
 
