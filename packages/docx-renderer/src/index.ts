@@ -904,6 +904,14 @@ function renderTable(
 
   // Data rows
   const dataRows = block.data.map((row, ri) => {
+    // `validateDocument` reports a row whose cell count is wrong, but a caller that
+    // uses the renderer directly got a silently padded or truncated row. Say so.
+    if (row.length !== colCount) {
+      console.warn(
+        `Table "${block.caption}" row ${ri + 1} has ${row.length} cell(s); the table declares ${colCount} column(s). ` +
+        `${row.length < colCount ? 'Missing cells are rendered empty' : 'Extra cells are dropped'}.`,
+      );
+    }
     const isLast = ri === block.data.length - 1;
     return new TableRow({
       children: block.headers.map((_, ci) =>
@@ -2432,18 +2440,38 @@ async function postProcess(
   const zip = await JSZip.loadAsync(buffer);
   let changed = false;
 
-  // 1. Chinese fonts, in both parts that carry run properties.
-  const THEME_ATTRS = /\s+w:(asciiTheme|hAnsiTheme|eastAsiaTheme|cstheme)="[^"]*"/g;
-  const LATIN_EAST_ASIA = /\sw:eastAsia="(Times New Roman|Arial|Calibri|Cambria)"/g;
-  for (const part of ['word/styles.xml', 'word/document.xml']) {
-    const entry = zip.file(part);
-    if (!entry) continue;
-    const original = await entry.async('string');
-    const patched = original
-      .replace(THEME_ATTRS, '')
-      .replace(LATIN_EAST_ASIA, ' w:eastAsia="仿宋"');
+  // 1. Chinese fonts. The writer library writes the ascii font name into
+  //    `w:docDefaults/w:rPrDefault/w:rPr/w:rFonts/@w:eastAsia` — the same value as
+  //    `w:ascii` — and WPS honours docDefaults, so any run that inherits from it
+  //    renders Chinese in Times New Roman.
+  //
+  //    Status as of docx 9.7.1: the emitted docDefaults is
+  //    `<w:docDefaults><w:rPrDefault/><w:pPrDefault/></w:docDefaults>` — no rFonts at
+  //    all, because this renderer never asks the library for a default document run.
+  //    The patch is therefore inert today; it stays as a guard because the symptom
+  //    it addresses was real and a library bump could reintroduce it, and because
+  //    staying narrow costs nothing.
+  //
+  //    Only that element is rewritten. Scoping the patch to docDefaults matters:
+  //    the previous version stripped every `*Theme` attribute and rewrote every
+  //    Latin `w:eastAsia` in both styles.xml and document.xml, which is harmless
+  //    for a template that says nothing but overrides one that says exactly what
+  //    it wants. A template's own run-level fonts now survive untouched.
+  const stylesPart = zip.file('word/styles.xml');
+  if (stylesPart) {
+    const original = await stylesPart.async('string');
+    const patched = original.replace(
+      /(<w:docDefaults>)[\s\S]*?(<\/w:docDefaults>)/,
+      (_match, open: string, close: string) => {
+        const body = _match.slice(open.length, _match.length - close.length);
+        const cleaned = body
+          .replace(/\s+w:(asciiTheme|hAnsiTheme|eastAsiaTheme|cstheme)="[^"]*"/g, '')
+          .replace(/\sw:eastAsia="(Times New Roman|Arial|Calibri|Cambria)"/g, ' w:eastAsia="仿宋"');
+        return open + cleaned + close;
+      },
+    );
     if (patched !== original) {
-      zip.file(part, patched);
+      zip.file('word/styles.xml', patched);
       changed = true;
     }
   }
