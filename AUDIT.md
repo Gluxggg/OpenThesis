@@ -714,3 +714,42 @@ A number the author writes by hand is left as literal text and emits no `SEQ`
 field: renumbering it would contradict what they asked for.
 
 `pnpm check`: 181 tests, all passing.
+
+---
+
+## 17. What the 书写指南 asks for that the renderer was not doing
+
+Rendering a thesis with every part the guide names, and reading the pages, found
+four things missing and one bug. None of them showed up in a test because no test
+had ever rendered a complete thesis.
+
+| # | What the page showed | Cause | Status |
+|---|---|---|---|
+| X-1 | 参考文献 printed `[r1] …`, `[r2] …` | The list printed the reference's internal `id` instead of its position | Numbered `[1]`, `[2]` in print order |
+| X-2 | 摘要, Abstract, 目录, 图表清单 all ran together on shared pages | Every front-matter part is concatenated into one Word section, so no break was emitted between them | Each part now starts on its own page |
+| X-3 | 目录 was an empty grey box | A TOC field has no result until Word updates it, and most people never press F9 | Entries are built at render time, one line per heading, with a dot leader and a `PAGEREF` field for the page |
+| X-4 | 图表清单 printed its heading and nothing else | The section type existed but nothing generated a list | Built from the caption index: `图1-1 系统结构 …… 1` |
+| X-5 | 参考文献, 附录, 作者简历 and 独创性说明 shared one page | Same as X-2, on the back-matter side | Each starts on its own page |
+
+### Where the entries come from
+
+- **目录**: a pre-pass walks the sections and every back-matter part and
+  registers each heading with a `_Toc…` bookmark. The TOC field is only kept as a
+  fallback for a document with no headings at all.
+- **图表清单**: the caption index already knows every caption in the document,
+  so the list is a filter over it. No second pass, no duplicated numbering.
+
+Page numbers are `PAGEREF` fields throughout: no generator can paginate, so Word
+fills them in when fields update, and the entry text is right either way.
+
+### Verified by rendering a 14-page thesis
+
+```
+摘要 / Abstract / 目录 / 插图清单 / 表格清单   each on its own page, roman numerals
+目录          8 entries with dot leaders and page numbers
+插图清单      图 1-1 系统结构 …… 1
+参考文献      [1] … [2] … on its own page
+附录 / 作者简历 / 独创性说明   each on its own page
+```
+
+`pnpm check`: 186 tests, all passing.

@@ -510,10 +510,10 @@ test('styles the cover from the template, one tier at a time', async () => {
   assert.doesNotMatch(meta, /<w:b\/>/);
 });
 
-test('emits a real TOC field for a 目录 section', async () => {
-  // A table of contents is a field, not text: Word fills in the entries and
-  // their page numbers when the field is updated. No generator can compute page
-  // numbers, so it emits the field rather than faking a list.
+test('a 目录 section lists the headings, with a page reference on each line', async () => {
+  // A TOC field is empty until Word updates it, and most people never press F9.
+  // The entries are built at render time; each carries a PAGEREF field so Word
+  // still refreshes the page numbers when fields update.
   const buffer = await renderDocument({
     outputPath: '', template,
     document: {
@@ -525,10 +525,14 @@ test('emits a real TOC field for a 目录 section', async () => {
     },
   });
   const { xml } = await documentXml(buffer);
-  // The field's quotes are XML-escaped in the part.
-  assert.match(xml, /<w:instrText[^>]*>TOC \\h \\o &quot;1-3&quot;<\/w:instrText>/);
   assert.match(xml, /目录/);
   assert.match(xml, /第一章 绪论/);
+  // One PAGEREF per entry, pointing at a bookmark the heading actually carries.
+  const refs = fieldInstrs(xml).filter(i => i.startsWith('PAGEREF'));
+  assert.equal(refs.length, 1, `expected one PAGEREF, got ${JSON.stringify(refs)}`);
+  const target = /PAGEREF\s+(\S+)/.exec(refs[0])?.[1];
+  assert.ok(target, 'the PAGEREF must name a bookmark');
+  assert.match(xml, new RegExp(`w:name="${target}"`), 'the heading must carry that bookmark');
 });
 
 /** Every `w:sectPr` in document order: the section breaks of the document. */
@@ -1549,7 +1553,7 @@ test('a [[表3-1]] in the body becomes a REF field pointing at the caption bookm
   });
   const { xml } = await documentXml(buffer);
 
-  const bookmark = xml.match(/<w:bookmarkStart[^>]*w:name="([^"]+)"/)?.[1];
+  const bookmark = xml.match(/<w:bookmarkStart[^>]*w:name="(_Ref[^"]+)"/)?.[1];
   const target = refTarget(xml);
   assert.ok(bookmark, 'expected a caption bookmark');
   assert.ok(target, 'expected a REF field');
@@ -1718,7 +1722,7 @@ test('a reference can name a block by id, which survives automatic numbering', a
     },
   });
   const { xml } = await documentXml(buffer);
-  const bookmark = xml.match(/<w:bookmarkStart[^>]*w:name="([^"]+)"/)?.[1];
+  const bookmark = xml.match(/<w:bookmarkStart[^>]*w:name="(_Ref[^"]+)"/)?.[1];
   const target = refTarget(xml);
   assert.ok(bookmark, 'expected the caption bookmark');
   assert.equal(target, bookmark, 'the field must point at that caption');
@@ -1838,8 +1842,11 @@ test('a caption\'s SEQ field sits inside its bookmark, so a REF returns the numb
     },
   });
   const { xml } = await documentXml(buffer);
-  const start = xml.indexOf('<w:bookmarkStart');
-  const end = xml.indexOf('<w:bookmarkEnd');
+  // The caption's own bookmark, not the first one in the document: headings
+  // carry `_Toc…` bookmarks of their own now.
+  const nameAt = xml.indexOf('_Ref');
+  const start = xml.lastIndexOf('<w:bookmarkStart', nameAt);
+  const end = xml.indexOf('<w:bookmarkEnd', nameAt);
   const between = xml.slice(start, end);
   assert.match(between, /SEQ Table/, 'the SEQ field must be inside the bookmark');
 });
@@ -1871,4 +1878,102 @@ test('a hand-written caption number stays literal text and is not renumbered', a
   const { xml } = await documentXml(buffer);
   assert.ok(!fieldInstrs(xml).some(i => i.startsWith('SEQ')), 'no SEQ field for a manual number');
   assert.match(xml, /<w:t[^>]*>表3-1<\/w:t>/, 'the manual label is written as text');
+});
+
+// ── Comparing the output against the 书写指南 ───────────────
+
+test('references are numbered in print order, not by their internal id', async () => {
+  // The id is a handle for cross-referencing in the content file. Printing it as
+  // the number put `[r1]` where `[1]` belongs.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Refs', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [{ type: 'paragraph', text: 'x' }] }],
+      backMatter: { references: [
+        { id: 'alpha', text: '第一篇文献.' },
+        { id: 'beta', text: '第二篇文献.' },
+      ] },
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /\[1\] 第一篇文献/);
+  assert.match(xml, /\[2\] 第二篇文献/);
+  assert.doesNotMatch(xml, /\[alpha\]/);
+});
+
+test('each front-matter part starts on its own page', async () => {
+  // 摘要, Abstract, 目录 and 图表清单 are separate pages in the guide; they used to
+  // run into one another because they share a section.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Pages', degree: 'master', date: '2026' }, cover: [],
+      sections: [
+        { id: 'abs', type: 'abstract', title: '摘要', content: [{ type: 'paragraph', text: 'a' }] },
+        { id: 'absEn', type: 'abstract', title: 'Abstract', content: [{ type: 'paragraph', text: 'b' }] },
+        { id: 'toc', type: 'toc', title: '目录', content: [] },
+      ],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  // One break before each part after the first.
+  assert.equal((xml.match(/<w:pageBreakBefore\/>/g) ?? []).length >= 2, true, 'expected a break before each later part');
+});
+
+test('a 图表清单 lists the captions the document actually has', async () => {
+  const contentDir = mkdtempSync(join(tmpdir(), 'openthesis-lof-'));
+  writeFileSync(
+    join(contentDir, 'a.png'),
+    Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9Qz0AEYBxVSF+FAP5FDvcfRYWgAAAAAElFTkSuQmCC', 'base64'),
+  );
+  const buffer = await renderDocument({
+    template, contentDir,
+    document: {
+      type: 'thesis', meta: { title: 'LOF', degree: 'master', date: '2026' }, cover: [],
+      sections: [
+        { id: 'lof', type: 'list_of_figures', title: '插图清单', content: [] },
+        { id: 'c1', type: 'chapter', title: 'C', content: [
+          { type: 'figure', path: 'a.png', caption: '系统结构' },
+          { type: 'table', caption: '参数一览', headers: ['A'], data: [['1']] },
+        ] },
+      ],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  // The list prints the caption and a page reference; it must not print the
+  // table, which belongs to 表格清单.
+  assert.match(xml, /图1-1 {2}系统结构/);
+  assert.doesNotMatch(xml, /表1-1 {2}参数一览/);
+  assert.ok(fieldInstrs(xml).some(i => i.startsWith('PAGEREF')), 'each line needs a page reference');
+});
+
+test('a 图表清单 with nothing to list says so instead of printing an empty page', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Empty', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'lof', type: 'list_of_figures', title: '插图清单', content: [] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /本文无此类内容/);
+});
+
+test('the back matter parts each start on their own page', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Back', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [{ type: 'paragraph', text: 'x' }] }],
+      backMatter: {
+        references: [{ id: 'r1', text: '文献.' }],
+        authorBiography: '简介.',
+        declaration: '声明.',
+      },
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  // 参考文献, 作者简历 and 独创性说明 each carry a break before their heading.
+  assert.equal((xml.match(/<w:pageBreakBefore\/>/g) ?? []).length >= 3, true);
 });

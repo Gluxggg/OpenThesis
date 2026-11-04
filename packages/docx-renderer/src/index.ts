@@ -16,7 +16,7 @@ import {
   Math as DocxMath, MathRun, MathFraction, MathRadical, MathSuperScript,
   MathSubScript, MathSubSuperScript,
   MathFunction, MathLimitLower, MathLimitUpper, BuilderElement,
-  TableOfContents, TabStopType,
+  TableOfContents, TabStopType, LeaderType,
 } from 'docx';
 import type {
   ISectionOptions, ISectionPropertiesOptions, IPageNumberTypeAttributes,
@@ -416,6 +416,9 @@ function renderHeading(
     : undefined;
 
   const numberPrefix = block.number ? `${block.number}  ` : '';
+  // A 目录 entry points at a bookmark on its heading, so the heading carries one.
+  const listed = headingBookmarks.get(block.text);
+  const tocBookmarkId = listed ? nextBookmarkId() : 0;
   return new Paragraph({
     // `STYLEREF` and a `SEQ … \s` field look the chapter number up by outline
     // level, so a heading that declares none cannot be found by either.
@@ -424,7 +427,11 @@ function renderHeading(
     // exact label. Otherwise the template's own numbering takes over, which is
     // how a guide that numbers chapters `1`, `1.1`, `2.3.3` gets honoured.
     numbering: block.number ? undefined : autoNumbering,
-    children: styledRuns(numberPrefix + block.text, style, style.font.bold),
+    children: [
+      ...(listed ? [captionBookmarkStart(listed.bookmark, tocBookmarkId)] : []),
+      ...styledRuns(numberPrefix + block.text, style, style.font.bold),
+      ...(listed ? [captionBookmarkEnd(tocBookmarkId)] : []),
+    ],
     alignment: mapAlignment(style.paragraph.alignment),
     // Headings carry the guide's hanging indent (0.75 / 1 / 1.25 cm); this
     // paragraph never emitted an indent at all, so it was dropped silently.
@@ -1812,6 +1819,123 @@ const FRONT_MATTER_TYPES: ReadonlySet<ThesisSection['type']> = new Set([
 ]);
 
 /** A 目录 is a field, not text — see `tocBlock`. */
+/**
+ * A paragraph whose only job is to start a new page.
+ *
+ * The front matter and the back matter are lists of parts that each belong on
+ * their own page, but they share one Word section, so the break has to be
+ * explicit. The line box is one twip tall, so it costs nothing visible.
+ */
+function pageBreakParagraph(): Paragraph {
+  return new Paragraph({
+    children: [],
+    pageBreakBefore: true,
+    spacing: { before: 0, after: 0, line: 1, lineRule: LineRuleType.EXACT },
+  });
+}
+
+/** One heading the 目录 must list, in reading order. */
+interface HeadingEntry {
+  level: number;
+  text: string;
+  bookmark: string;
+}
+
+let headingIndex: HeadingEntry[] = [];
+let headingBookmarks = new Map<string, HeadingEntry>();
+
+function resetHeadingIndex(): void {
+  headingIndex = [];
+  headingBookmarks = new Map();
+}
+
+/** Register one heading, returning its entry. */
+function registerHeading(level: number, text: string): HeadingEntry {
+  const existing = headingBookmarks.get(text);
+  if (existing) return existing;
+  const entry: HeadingEntry = { level, text, bookmark: `_Toc${90000000 + headingIndex.length + 1}` };
+  headingIndex.push(entry);
+  headingBookmarks.set(text, entry);
+  return entry;
+}
+
+/**
+ * Walk the document in reading order and register the headings a 目录 lists.
+ *
+ * A TOC field shows nothing until Word updates it and most people never press
+ * F9, so the entries are built at render time. Each entry carries a PAGEREF
+ * field, so Word still refreshes the page numbers.
+ */
+function collectHeadingIndex(doc: OpenThesisDocument): void {
+  const skipped = new Set(['toc']);
+  const visit = (sections: readonly unknown[]): void => {
+    for (const raw of sections) {
+      const section = raw as { type?: string; title?: string; subsections?: readonly unknown[] };
+      if (!section || !section.type || !section.title) continue;
+      if (!skipped.has(section.type)) {
+        const level = section.type === 'chapter' ? 1 : 2;
+        registerHeading(level, section.title);
+      }
+      if (section.subsections) visit(section.subsections);
+    }
+  };
+  if (doc.type !== 'thesis') return;
+  visit(doc.sections ?? []);
+  // The back matter is part of the 目录 too. Its headings are the fixed ones the
+  // renderer prints, so they can be listed without looking at any content.
+  const back = doc.backMatter;
+  if (!back) return;
+  if (back.references && back.references.length > 0) registerHeading(1, '参考文献');
+  for (const appendix of back.appendices ?? []) {
+    if (appendix.title) registerHeading(1, appendix.title);
+  }
+  if (back.authorBiography) registerHeading(1, '作者简历及在学期间取得的成果');
+  if (back.declaration) registerHeading(1, '独创性说明');
+}
+
+/** Where a 目录 line's page number sits: the right edge of the text column. */
+function tocRightTab(template: DocumentTemplate): number {
+  const page = template.page;
+  const width = page?.width ?? 11906;
+  const left = page?.margins?.left ?? 1701;
+  const right = page?.margins?.right ?? 1701;
+  return Math.max(1200, width - left - right);
+}
+
+/** A page reference to a bookmark: Word fills the number in on update. */
+function pageRefField(bookmark: string): XmlComponent {
+  return new RawElement('w:r', {}, undefined, [
+    new RawElement('w:fldChar', { 'w:fldCharType': 'begin' }),
+    new RawElement('w:instrText', { 'xml:space': 'preserve' }, ` PAGEREF ${bookmark} \\h `),
+    new RawElement('w:fldChar', { 'w:fldCharType': 'separate' }),
+    new RawElement('w:fldChar', { 'w:fldCharType': 'end' }),
+  ]);
+}
+
+/** One line of a 目录: the heading, a tab with a dot leader, and its page. */
+function tocEntryParagraph(entry: HeadingEntry, template: DocumentTemplate): Paragraph {
+  const style = resolveStyle(template, 'toc_entry');
+  return new Paragraph({
+    children: [styledRun(entry.text, style), styledRun('	', style), pageRefField(entry.bookmark)],
+    tabStops: [{ type: TabStopType.RIGHT, position: tocRightTab(template), leader: LeaderType.DOT }],
+    indent: entry.level > 1 ? { left: (entry.level - 1) * 480 } : undefined,
+    spacing: { before: 0, after: 0 },
+  });
+}
+
+/** One line of a 图表清单: the caption, a tab, and the page it is on. */
+function listEntryParagraph(entry: CaptionEntry, template: DocumentTemplate): Paragraph {
+  const style = resolveStyle(template, 'toc_entry');
+  return new Paragraph({
+    children: [
+      styledRun(`${entry.label}  ${entry.title}`, style),
+      styledRun('	', style),
+      pageRefField(captionBookmark(entry.label)),
+    ],
+    tabStops: [{ type: TabStopType.RIGHT, position: tocRightTab(template), leader: LeaderType.DOT }],
+    spacing: { before: 0, after: 0 },
+  });
+}
 function tocBlock(title: string): Paragraph {
   return new TableOfContents(title, { hyperlink: true, headingStyleRange: '1-3' }) as unknown as Paragraph;
 }
@@ -1853,12 +1977,30 @@ function renderThesisParts(
     // end up after a chapter.
     const children: (Paragraph | Table)[] = [];
     for (const section of frontMatter) {
+      // Each front-matter part begins on its own page: 摘要, Abstract, 目录 and
+      // 图表清单 are separate pages in the guide, not one continuous flow.
+      if (children.length > 0) children.push(pageBreakParagraph());
       if (section.type === 'toc') {
-        // Word fills the entries and their page numbers when the field is
-        // updated; no generator can compute page numbers, so the honest output
-        // is the field plus `w:updateFields` asking Word to refresh it.
         children.push(renderHeading(template, { type: 'heading1', text: section.title, styleRole: 'section_heading' }));
-        children.push(tocBlock(section.title));
+        if (headingIndex.length === 0) {
+          // Nothing to list: leave the field for Word to fill rather than
+          // printing an empty page.
+          children.push(tocBlock(section.title));
+        } else {
+          for (const heading of headingIndex) children.push(tocEntryParagraph(heading, template));
+        }
+        continue;
+      }
+      if (section.type === 'list_of_figures' || section.type === 'list_of_tables') {
+        const kind = section.type === 'list_of_figures' ? '图' : '表';
+        children.push(renderHeading(template, { type: 'heading1', text: section.title, styleRole: 'section_heading' }));
+        // A 图表清单 lists the captions, and the caption index already knows every
+        // one of them - so build the list instead of printing an empty heading.
+        const entries = [...captionIndex.entries.values()].filter(entry => entry.kind === kind);
+        if (entries.length === 0) {
+          children.push(renderParagraph(template, { type: 'paragraph', text: '（本文无此类内容）' }));
+        }
+        for (const entry of entries) children.push(listEntryParagraph(entry, template));
         continue;
       }
       children.push(...processBlocks(trimTrailingPageBreak(flattenSections([section])), template, contentDir, undefined, state));
@@ -1898,22 +2040,27 @@ function renderThesisParts(
   // the guide numbers them with the body, not with the front matter.
   if (doc.backMatter?.references && doc.backMatter.references.length > 0) {
     bodyChildren.push(
+      pageBreakParagraph(),
       renderHeading(template, { type: 'heading1', text: '参考文献', styleRole: 'section_heading' }),
-      ...doc.backMatter.references.map(ref =>
+      ...doc.backMatter.references.map((ref, index) =>
         renderParagraph(template, {
           type: 'paragraph_no_indent',
-          text: `[${ref.id}] ${ref.text}`,
+          text: `[${index + 1}] ${ref.text}`,
         }, undefined, 'reference_item'),
       ),
     );
   }
 
   if (doc.backMatter?.appendices && doc.backMatter.appendices.length > 0) {
-    bodyChildren.push(...processBlocks(flattenSections(doc.backMatter.appendices), template, contentDir, undefined, state));
+    bodyChildren.push(
+      pageBreakParagraph(),
+      ...processBlocks(flattenSections(doc.backMatter.appendices), template, contentDir, undefined, state),
+    );
   }
 
   if (doc.backMatter?.authorBiography) {
     bodyChildren.push(
+      pageBreakParagraph(),
       renderHeading(template, { type: 'heading1', text: '作者简历及在学期间取得的成果', styleRole: 'section_heading' }),
       renderParagraph(template, { type: 'paragraph', text: doc.backMatter.authorBiography }),
     );
@@ -1921,6 +2068,7 @@ function renderThesisParts(
 
   if (doc.backMatter?.declaration) {
     bodyChildren.push(
+      pageBreakParagraph(),
       renderHeading(template, { type: 'heading1', text: '独创性说明', styleRole: 'section_heading' }),
       renderParagraph(template, { type: 'paragraph', text: doc.backMatter.declaration }),
     );
@@ -2107,10 +2255,10 @@ function renderJournalArticle(
     if (doc.backMatter.references && doc.backMatter.references.length > 0) {
       children.push(
         renderHeading(template, { type: 'heading1', text: 'References' }),
-        ...doc.backMatter.references.map(ref =>
+        ...doc.backMatter.references.map((ref, index) =>
           renderParagraph(template, {
             type: 'paragraph_no_indent',
-            text: `[${ref.id}] ${ref.text}`,
+            text: `[${index + 1}] ${ref.text}`,
           })
         )
       );
@@ -2681,6 +2829,10 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   // Captions are numbered before anything renders: a `[[表#id]]` reference needs
   // the number that the caption will carry, and it may appear above the caption.
   numberCaptionsInDocument(doc);
+  // The 目录 is built before the body renders for the same reason: its entries
+  // are the headings, and the headings need their bookmarks assigned up front.
+  resetHeadingIndex();
+  collectHeadingIndex(doc);
 
   const generatedHeader = headerText
     || (doc.type === 'official' ? '' : `${template.meta.organization}${doc.type === 'journal' ? '学术论文' : '学位论文'}`);
@@ -3257,6 +3409,9 @@ interface CaptionEntry {
   seq: number;
   /** The label as it reads, e.g. `表2-1`. */
   label: string;
+  /** The caption's own words, without the number. */
+  title: string;
+
   /** True when the author wrote the number, so it is literal text, not a field. */
   manual: boolean;
 }
@@ -3274,7 +3429,7 @@ function resetCaptionIndex(): void {
   captionIndex = { entries: new Map(), byId: new Map() };
 }
 
-type NumberedBlock = { type?: string; number?: string; id?: string };
+type NumberedBlock = { type?: string; number?: string; id?: string; caption?: string };
 
 /** Number every table and figure in one block list that brought no number. */
 /** Number every table and figure in one block list that brought no number. */
@@ -3292,8 +3447,8 @@ function numberCaptions(blocks: NumberedBlock[], chapter: number, counters: Map<
     // from under them. Everything else is Word's to number.
     const written = block.number;
     const entry: CaptionEntry = written
-      ? { kind, chapter, seq, label: written, manual: true }
-      : { kind, chapter, seq, label: chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`, manual: false };
+      ? { kind, chapter, seq, label: written, manual: true, title: block.caption ?? '' }
+      : { kind, chapter, seq, label: chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`, manual: false, title: block.caption ?? '' };
     block.number = entry.label;
 
     captionIndex.entries.set(entry.label, entry);
