@@ -516,6 +516,7 @@ function renderEquation(
   }
 
   if (block.number) {
+    const bookmarkId = nextBookmarkId();
     const page = template.page;
     const printableWidth = Math.max(
       1200,
@@ -533,6 +534,8 @@ function renderEquation(
       children: [
         new TextRun('\t'),
         new DocxMath({ children: equationChildren }),
+        // The number is bookmarked, so `[[式1-1]]` can become a REF field to it.
+        captionBookmarkStart(captionBookmark(`式${block.number}`), bookmarkId),
         new TextRun({
           text: `\t(${block.number})`,
           size: style.font.size ?? 24,
@@ -543,6 +546,7 @@ function renderEquation(
             cs: style.font.name ?? 'Times New Roman',
           },
         }),
+        captionBookmarkEnd(bookmarkId),
       ],
       spacing: { before: 120, after: 120, ...lineStyle(style, 312) },
     });
@@ -589,15 +593,15 @@ function mathComponents(nodes: LatexMathNode[]): MathComponent[] {
       case 'sum':
         return (!node.subScript && !node.superScript)
           ? new MathRun('∑')
-          : mathNary('∑', node.subScript, node.superScript);
+          : mathNary('∑', node.subScript, node.superScript, node.body);
       case 'integral':
         return (!node.subScript && !node.superScript)
           ? new MathRun('∫')
-          : mathNary('∫', node.subScript, node.superScript);
+          : mathNary('∫', node.subScript, node.superScript, node.body);
       case 'nary':
         return (!node.subScript && !node.superScript)
           ? new MathRun(node.operator)
-          : mathNary(node.operator, node.subScript, node.superScript);
+          : mathNary(node.operator, node.subScript, node.superScript, node.body);
       case 'accent':
         return mathAccent(node.accent, node.children);
       case 'bar':
@@ -732,7 +736,12 @@ function mathNoBarFraction(numerator: LatexMathNode[], denominator: LatexMathNod
   }));
 }
 
-function mathNary(operator: string, subScript?: LatexMathNode[], superScript?: LatexMathNode[]): MathComponent {
+function mathNary(
+  operator: string,
+  subScript?: LatexMathNode[],
+  superScript?: LatexMathNode[],
+  body?: LatexMathNode[],
+): MathComponent {
   const properties = new BuilderElement({
     name: 'm:naryPr',
     children: [
@@ -748,7 +757,9 @@ function mathNary(operator: string, subScript?: LatexMathNode[], superScript?: L
       properties,
       mathArgument('m:sub', subScript ? mathComponents(subScript) : []),
       mathArgument('m:sup', superScript ? mathComponents(superScript) : []),
-      mathArgument('m:e', []),
+      // An empty body is printed by every viewer as a placeholder box, so the
+      // operand the parser absorbed has to reach here.
+      mathArgument('m:e', body ? mathComponents(body) : []),
     ],
   }));
 }
@@ -798,7 +809,10 @@ function styledRuns(
   // disturb the runs around it, so both are handled in the same scan.
   const runs: (TextRun | DocxMath | XmlComponent)[] = [];
   const mathSource = '\\$(?!\\s)([^$\\n]+?)(?<![\\s\\\\])\\$';
-  const pattern = new RegExp(`${mathSource}|\\[\\[(表|图)\\s*([^\\[\\]]+?)\\]\\]`, 'g');
+  // One pattern for both markers, and it must list the same labels as CROSS_REF:
+  // this used to be a second, narrower copy that only knew 表 and 图, so `[[式1-1]]`
+  // was recognised by the test above and then left as literal text here.
+  const pattern = new RegExp(`${mathSource}|\\[\\[(表|图|式)\\s*([^\\[\\]]+?)\\]\\]`, 'g');
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -3301,7 +3315,7 @@ function borderStyleOf(value: string): (typeof BorderStyle)[keyof typeof BorderS
  * turns into the field. A manuscript that writes the number out longhand keeps
  * working exactly as before — its text is left alone.
  */
-const CROSS_REF = /\[\[(表|图)\s*([^\[\]]+?)\]\]/g;
+const CROSS_REF = /\[\[(表|图|式)\s*([^\[\]]+?)\]\]/g;
 
 /** The bookmark name a caption's number lives under. */
 function captionBookmark(label: string): string {
@@ -3342,8 +3356,10 @@ class RawElement extends XmlComponent {
  * number as a plain string (which is what this renderer did) produces text that
  * looks right and cannot be referenced, renumbered, or listed.
  */
-function captionSeqLabel(kind: '表' | '图'): string {
-  return kind === '表' ? 'Table' : 'Figure';
+function captionSeqLabel(kind: '表' | '图' | '式'): string {
+  if (kind === '表') return 'Table';
+  if (kind === '图') return 'Figure';
+  return 'Equation';
 }
 
 /** A bookmark around a caption's number, so a REF field can point at it. */
@@ -3366,7 +3382,7 @@ function captionBookmarkEnd(id: number): XmlComponent {
  * fields (LibreOffice's renderer, some WPS builds) then show the number the
  * renderer computed instead of a blank. Word recalculates it on update.
  */
-function captionSeqField(kind: '表' | '图', result: string, restartAtHeading: boolean): XmlComponent {
+function captionSeqField(kind: '表' | '图' | '式', result: string, restartAtHeading: boolean): XmlComponent {
   const seq = captionSeqLabel(kind);
   const instr = ` SEQ ${seq} \\* ARABIC${restartAtHeading ? ' \\s 1' : ''} `;
   return new RawElement('w:r', {}, undefined, [
@@ -3439,7 +3455,8 @@ function resolveReference(raw: string): { bookmark: string; result: string } | u
     console.warn(`Cross-reference to "${label}" matches no caption in this document; the reference will be left as text.`);
     return undefined;
   }
-  return { bookmark: captionBookmark(entry.label), result: entry.label };
+  // `display` is what the field prints: 表1-1 for a caption, (1-1) for an equation.
+  return { bookmark: captionBookmark(entry.label), result: entry.display };
 }
 
 function crossReferenceField(bookmark: string, result: string): XmlComponent {
@@ -3483,11 +3500,14 @@ function resetBookmarks(): void {
  * finished label.
  */
 interface CaptionEntry {
-  kind: '表' | '图';
+  kind: '表' | '图' | '式';
   chapter: number;
   seq: number;
   /** The label as it reads, e.g. `表2-1`. */
   label: string;
+  /** What a REF field prints: the caption label, or (1-1) for an equation. */
+  display: string;
+
   /** The caption's own words, without the number. */
   title: string;
 
@@ -3508,12 +3528,41 @@ function resetCaptionIndex(): void {
   captionIndex = { entries: new Map(), byId: new Map() };
 }
 
-type NumberedBlock = { type?: string; number?: string; id?: string; caption?: string };
+type NumberedBlock = { type?: string; number?: string; id?: string; caption?: string; latex?: string };
 
 /** Number every table and figure in one block list that brought no number. */
 /** Number every table and figure in one block list that brought no number. */
 function numberCaptions(blocks: NumberedBlock[], chapter: number, counters: Map<string, number>): void {
   for (const block of blocks) {
+    // A numbered equation takes (chapter-sequence), the way the guide numbers
+    // them. It shares the walk with the captions because it needs the same
+    // chapter number, but it has a sequence of its own.
+    if (block.type === 'equation_numbered') {
+      const key = `${chapter}|式`;
+      let seq = counters.get(key) ?? 0;
+      if (!block.number) {
+        seq += 1;
+        counters.set(key, seq);
+        block.number = chapter > 0 ? `${chapter}-${seq}` : String(seq);
+      } else {
+        // A number the author wrote still takes its place in the sequence.
+        seq += 1;
+        counters.set(key, seq);
+      }
+      // Registered so `[[式1-1]]` can find it; a REF field prints (1-1).
+      const entry: CaptionEntry = {
+        kind: '式',
+        chapter,
+        seq,
+        label: `式${block.number}`,
+        display: `(${block.number})`,
+        manual: Boolean(block.number),
+        title: block.latex ?? '',
+      };
+      captionIndex.entries.set(entry.label, entry);
+      if (block.id) captionIndex.byId.set(`式#${block.id}`, entry);
+      continue;
+    }
     const kind = block.type === 'table' ? '表' : block.type === 'figure' ? '图' : undefined;
     if (!kind) continue;
 
@@ -3526,8 +3575,8 @@ function numberCaptions(blocks: NumberedBlock[], chapter: number, counters: Map<
     // from under them. Everything else is Word's to number.
     const written = block.number;
     const entry: CaptionEntry = written
-      ? { kind, chapter, seq, label: written, manual: true, title: block.caption ?? '' }
-      : { kind, chapter, seq, label: chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`, manual: false, title: block.caption ?? '' };
+      ? { kind, chapter, seq, label: written, display: written, manual: true, title: block.caption ?? '' }
+      : { kind, chapter, seq, label: chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`, display: chapter > 0 ? `${kind}${chapter}-${seq}` : `${kind}${seq}`, manual: false, title: block.caption ?? '' };
     block.number = entry.label;
 
     captionIndex.entries.set(entry.label, entry);

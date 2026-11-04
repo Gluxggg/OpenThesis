@@ -812,3 +812,41 @@ That last row was a real bug: entries were levelled by section *type*, so 摘要
 符号说明 were indented as if they sat under something. Levels follow nesting depth now.
 
 `pnpm check`: 191 tests, all passing.
+
+---
+
+## 19. Equations: the placeholder box, the numbering, and the reference
+
+Rendering a page of equations against the guide found three things.
+
+| # | What the page showed | Cause | Status |
+|---|---|---|---|
+| Y-1 | A small □ sat in the middle of every integral and sum | The n-ary operator and its operand were parsed as **siblings**, so `<m:e/>` (the body) was emitted empty; every viewer prints an empty n-ary body as a placeholder box | The parser now absorbs the operand into the operator: `\int_0^\infty f dx` is one node, and its body reaches `m:e` |
+| Y-2 | Equation numbers were typed by hand | Only `number` was printed; nothing generated it | `equation_numbered` is numbered `(chapter-sequence)` by the same walk that numbers captions, restarting per chapter |
+| Y-3 | `[[式1-1]]` printed literally | Two patterns listed the reference labels, and only the `hasRef` test had been widened to `式`; the expansion pattern still knew `表` and `图` only | One list of labels; the number is bookmarked and a `REF` field prints `(1-1)` |
+
+Y-3 is worth keeping: the code had the same label list in two places, so widening one
+made the marker *recognised* and then left as text. The two are a single comment
+apart now.
+
+### What the page shows
+
+```
+如式(1-1)所示，应力与应变的关系为：
+                            σ = Eε                                    (1-1)
+弹性模量与泊松比的关系见式(1-2)：
+                          G = E / 2(1+ν)                                 (1-2)
+高斯积分：
+                     ∫₀^∞ e^(-x²) dx = √π / 2                       (no number)
+求和与上下标：
+                        ∑_{i=1}^n αᵢ xᵢ² + β                            (1-3)
+```
+
+- The operator bodies are filled: no placeholder box anywhere.
+- The numbers are generated, per chapter, and restart at (2-1) in chapter 2.
+- The reference in the sentence resolves to (1-1) as a `REF` field, so it follows
+  the equation when the document is edited.
+- Greek letters, sub/superscripts, fractions, radicals and the integral limits all
+  render as native OMML.
+
+`pnpm check`: 195 tests, all passing.
