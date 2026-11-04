@@ -1218,14 +1218,20 @@ function detectStyleRoles(
     // own level-1 style; a bare `u标题` deliberately does not match, because the
     // USTB template uses it for front-matter headings (摘要, ABSTRACT, 序) with
     // different spacing from a chapter title.
-    { regex: /^(标题\s*1|Heading\s*1|Chapter|第.*章|h1|标题1|章标题|u?1级标题)$/i, role: 'heading1' },
+    { regex: /^(标题\s*1|Heading\s*1|Chapter|第.*章|h1|标题1|章标题|u?1级标题|一级标题|Head1|Head\s*1|MainHeading)$/i, role: 'heading1' },
     // Section titles
-    { regex: /^(标题\s*2|Heading\s*2|Section|h2|标题2|节标题|u?2级标题)$/i, role: 'heading2' },
+    { regex: /^(标题\s*2|Heading\s*2|Section|h2|标题2|节标题|u?2级标题|二级标题|Head2|Head\s*2)$/i, role: 'heading2' },
     // Subsection titles
-    { regex: /^(标题\s*3|Heading\s*3|Subsection|h3|标题3|小节标题|u?3级标题)$/i, role: 'heading3' },
+    { regex: /^(标题\s*3|Heading\s*3|Subsection|h3|标题3|小节标题|u?3级标题|三级标题|Head3|Head\s*3)$/i, role: 'heading3' },
     { regex: /^(标题\s*4|Heading\s*4|h4|标题4|u?4级标题)$/i, role: 'heading4' },
     // Body text
-    { regex: /^(正文|u正文|Normal|Body|body\s*text|正文文本|普通)$/i, role: 'paragraph' },
+    // Body text. The stock names come first; the rest were added after parsing
+    // real templates, where a university calls its body style `硕士正文样式` and an
+    // Elsevier template calls it `Standard`.
+    {
+      regex: /^(正文|u正文|Normal|Body|body\s*text|正文文本|普通|硕士正文样式|博士正文样式|学位论文正文|Standard|Body\s*Text\s*Indent|正文样式)$/i,
+      role: 'paragraph',
+    },
     // Figure and table captions are separate roles: the guide spaces a table
     // caption (段前1行) differently from a figure caption (段前0.1行).
     { regex: /^(u?图标题|图题|Figure\s*Caption)$/i, role: 'figure_caption' },
