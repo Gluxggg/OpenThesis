@@ -257,6 +257,7 @@ async function cmdBuild(args: string[]) {
         template,
         document: contentJson,
         contentDir,
+        pageNumberRestart: !args.includes('--no-page-restart'),
       });
       if (toStdout) process.stdout.write(buffer);
     } else {
@@ -486,7 +487,7 @@ const VALID_DOC_TYPES: DocumentType[] = ['thesis', 'journal', 'official'];
 const COMMAND_FLAGS: Record<string, readonly string[]> = {
   parse:  ['--type', '--org'],
   import: ['--type', '-o'],
-  build:  ['--type', '-t', '-o'],
+  build:  ['--type', '-t', '-o', '--no-page-restart'],
   init:   ['--type'],
 };
 
@@ -661,6 +662,9 @@ function printHelp() {
     parse <template.docx>    --type <t>  --org <name>
     import <content.md>      --type <t>  -o <content.json>    (stdin input requires -o)
     build <content.json|md>  --type <t>  -t <template.json>   (default: built-in USTB)
+                             --no-page-restart          Continue page numbers across the
+                                                        whole document; needed only for viewers
+                                                        that drop tables otherwise (LibreOffice)
                              -o <output.docx>                 (default: input + .docx, "-" for stdout)
     init                     --type <t>
 
