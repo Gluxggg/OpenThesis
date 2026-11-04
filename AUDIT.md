@@ -902,3 +902,49 @@ the margin. It now indents two characters with a matching hanging indent, unless
 template declares its own.
 
 `pnpm check`: 205 tests, all passing.
+
+---
+
+## 21. The last three: generated abstracts, name order, and the style roles
+
+### The 摘要 page from `meta`
+
+`meta.abstract`, `meta.keywords`, `meta.abstractEn` existed on the schema and were
+only ever read by the journal renderer, so a thesis that filled them in produced
+nothing. They generate the 摘要 and Abstract pages now, and the pages are built as
+runs rather than as one block of text, because the guide sets the 关键词 label in
+黑体 while the keywords keep the body font:
+
+```
+摘要
+
+    本文研究如何把内容与排版分离。提出一种基于模板的文档生成方法，
+
+    **关键词：**开放模板；文档生成；结构化内容；排版自动化
+```
+
+A written `abstract` section still wins: the generated page is only added when the
+document did not write one. Keywords alone generate the page too - the first cut
+required an abstract, so a document that set only `keywords` got nothing at all.
+
+Three roles were added for this: `thesis_abstract`, `thesis_keywords`, and their
+`_en` counterparts, plus parser patterns so a template that carries 摘要正文 or
+关键词 styles binds them instead of falling back to the body.
+
+### English author names in GB/T order
+
+The standard writes an English author as `SMITH J` — family name, then initials
+without full stops. `formatAuthors` turns them round now:
+
+| Written as | Printed as |
+|---|---|
+| `Mary Smith` | `SMITH M` |
+| `Ann B Brown` | `BROWN A B` |
+| `Ann B. Brown` | `BROWN A B` |
+| `Smith, Mary` | `SMITH M` |
+| `SMITH J` | `SMITH J` (already inverted, left alone) |
+| `张三` | `张三` (Chinese names untouched) |
+
+Anything that does not look like a name is returned unchanged rather than mangled.
+
+`pnpm check`: 209 tests, all passing.

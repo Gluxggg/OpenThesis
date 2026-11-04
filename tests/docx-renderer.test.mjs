@@ -2296,3 +2296,99 @@ test('a citation to an entry that does not exist warns and stays as text', async
   assert.match(xml, /\[\[引用#nope\]\]/);
   assert.ok(warnings.some(w => w.includes('nope')), `expected a warning, got ${JSON.stringify(warnings)}`);
 });
+
+// ── Thesis front matter from meta, and GB/T name order ─────
+
+test('a thesis abstract is generated from meta when no abstract section exists', async () => {
+  // `meta.abstract` and `meta.keywords` were only ever read by the journal
+  // renderer, so a thesis that filled them in got nothing at all.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis',
+      meta: {
+        title: '题名', degree: 'master', date: '2026', omitCover: true,
+        abstract: '这是一段中文摘要。',
+        keywords: ['开放模板', '文档生成'],
+        abstractEn: 'This is an English abstract.',
+        keywordsEn: ['open template'],
+      },
+      cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: '第一章', content: [{ type: 'paragraph', text: 'x' }] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /这是一段中文摘要/);
+  // The bold label and the keywords are separate runs, so read them apart.
+  assert.match(xml, />关键词：</);
+  assert.match(xml, />开放模板；文档生成</);
+  assert.match(xml, /This is an English abstract/);
+  assert.match(xml, />Key words: </);
+  assert.match(xml, />open template</);
+  // Both pages carry their own heading.
+  assert.match(xml, /摘要<\/w:t>/);
+  assert.match(xml, /Abstract<\/w:t>/);
+});
+
+test('a written abstract section wins over the one built from meta', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis',
+      meta: { title: '题名', degree: 'master', date: '2026', omitCover: true, abstract: '来自 meta 的摘要。' },
+      cover: [],
+      sections: [
+        { id: 'abs', type: 'abstract', title: '摘要', content: [{ type: 'paragraph', text: '来自内容的摘要。' }] },
+        { id: 'c1', type: 'chapter', title: '第一章', content: [{ type: 'paragraph', text: 'x' }] },
+      ],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /来自内容的摘要/);
+  assert.doesNotMatch(xml, /来自 meta 的摘要/, 'the generated one must not be added as well');
+});
+
+test('the 关键词 label is bold while the keywords keep the body font', async () => {
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis',
+      meta: { title: '题名', degree: 'master', date: '2026', omitCover: true, keywords: ['甲', '乙'] },
+      cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: '第一章', content: [{ type: 'paragraph', text: 'x' }] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  // Each run carries its own `w:rPr`, so read the run that holds each piece.
+  const runContaining = (needle) => {
+    const at = xml.indexOf(needle);
+    assert.ok(at > 0, `expected ${needle}`);
+    return xml.slice(xml.lastIndexOf('<w:r>', at), xml.indexOf('</w:r>', at));
+  };
+  assert.match(runContaining('关键词'), /<w:b\/>/, 'the label is bold');
+  assert.doesNotMatch(runContaining('甲'), /<w:b\/>/, 'the keywords are not bold');
+});
+
+test('an English author is turned round to SMITH J form', async () => {
+  // GB/T 7714 writes an English author as family name then initials: SMITH J.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Names', degree: 'master', date: '2026', omitCover: true }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [{ type: 'paragraph', text: 'x' }] }],
+      backMatter: { references: [
+        { id: 'a', type: 'journal', language: 'en', authors: ['Mary Smith', 'Ann B Brown'], title: 'T', container: 'J', year: 2024 },
+        { id: 'b', type: 'journal', language: 'en', authors: ['SMITH J'], title: 'T2', container: 'J', year: 2024 },
+        { id: 'c', type: 'journal', language: 'zh', authors: ['张三'], title: 'T3', container: '刊名', year: 2024 },
+      ] },
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const runs = [...xml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map(m => m[1]);
+  const entries = runs.filter(text => text.startsWith('['));
+  // `Mary Smith` becomes SMITH M; `Ann B Brown` becomes BROWN A B.
+  assert.ok(entries.some(e => e.includes('SMITH M, BROWN A B')), `got ${JSON.stringify(entries)}`);
+  assert.ok(!entries.some(e => e.includes('Mary Smith')), 'the original order is gone');
+  assert.ok(entries.some(e => e.includes('SMITH J')), 'a name already inverted is left alone');
+  assert.ok(entries.some(e => e.includes('张三')), 'a Chinese name is untouched');
+});

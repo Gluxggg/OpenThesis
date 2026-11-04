@@ -374,7 +374,15 @@ export type StyleRole = BlockType
    * With one they resolve through the template like every other block.
    */
   | 'journal_title' | 'journal_author' | 'journal_affiliation'
-  | 'journal_abstract' | 'journal_keywords';
+  | 'journal_abstract' | 'journal_keywords'
+  /**
+   * Thesis front matter. 摘要 and 关键词 are generated from `ThesisMeta` when a
+   * document does not write them as content, and the guide gives them their own
+   * formatting: the label is 黑体 and the body 宋体, which is not the body
+   * paragraph's own rule.
+   */
+  | 'thesis_abstract' | 'thesis_keywords'
+  | 'thesis_abstract_en' | 'thesis_keywords_en';
 
 export interface HeadingBlock extends BaseBlock {
   type: 'heading1' | 'heading2' | 'heading3' | 'heading4';
@@ -559,6 +567,8 @@ export interface ThesisMeta {
   keywords?: string[];
   abstract?: string;
   abstractEn?: string;
+  /** 英文关键词, for the English abstract page. */
+  keywordsEn?: string[];
   classificationNumber?: string;
   studentId?: string;
   /**
