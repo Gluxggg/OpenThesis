@@ -1544,3 +1544,154 @@ test('a longhand caption number is left as text, not converted to a field', asyn
   assert.doesNotMatch(xml, /<w:fldSimple/);
   assert.match(xml, /如表3-1所示。/);
 });
+
+// ── Table and figure formatting, round two ───────────────────
+
+test('a table uses the template column widths when the column count matches', async () => {
+  // The template's own grid only means something at the same column count: its
+  // 12-column example says nothing about a 2-column table.
+  const tpl = structuredClone(template);
+  tpl.tableFormat = {
+    alignment: 'center',
+    layout: 'fixed',
+    columnWidths: [3000, 2000, 1500],
+  };
+
+  const buffer = await renderDocument({
+    template: tpl,
+    document: {
+      type: 'thesis', meta: { title: 'Widths', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'table', caption: '三列', headers: ['A', 'B', 'C'], data: [['1', '2', '3']] },
+        { type: 'table', caption: '两列', headers: ['A', 'B'], data: [['1', '2']] },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const grids = [...xml.matchAll(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/g)]
+    .map(m => [...m[0].matchAll(/w:w="(\d+)"/g)].map(x => Number(x[1])));
+
+  assert.deepEqual(grids[0], [3000, 2000, 1500], 'the matching table takes the template grid');
+  assert.equal(grids[1].length, 2);
+  assert.ok(Math.abs(grids[1][0] - grids[1][1]) <= 1, 'an unmatched table splits the printable width evenly');
+
+  // Alignment and layout reach `w:tblPr`.
+  assert.match(xml, /<w:jc w:val="center"\/>/);
+  assert.match(xml, /<w:tblLayout w:type="fixed"\/>/);
+});
+
+test('a figure takes its alignment from the template', async () => {
+  const contentDir = mkdtempSync(join(tmpdir(), 'openthesis-fig-align-'));
+  writeFileSync(
+    join(contentDir, 'pic.png'),
+    Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9Qz0AEYBxVSF+FAP5FDvcfRYWgAAAAAElFTkSuQmCC', 'base64'),
+  );
+
+  const tpl = structuredClone(template);
+  tpl.imageFormat = { alignment: 'left', placement: 'inline' };
+
+  const buffer = await renderDocument({
+    template: tpl,
+    contentDir,
+    document: {
+      type: 'thesis', meta: { title: 'Fig', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'figure', path: 'pic.png', caption: '图', number: '图1' },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const drawingAt = xml.indexOf('<w:drawing>');
+  assert.ok(drawingAt > 0);
+  const paragraph = xml.slice(xml.lastIndexOf('<w:p>', drawingAt), drawingAt);
+  assert.match(paragraph, /<w:jc w:val="left"\/>/, 'the figure paragraph should be left-aligned');
+});
+
+test('captions without a number are numbered per chapter', async () => {
+  // A caption with no `number` used to render with no number at all, which made
+  // it unreachable from a cross-reference.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Auto', degree: 'master', date: '2026' }, cover: [],
+      sections: [
+        { id: 'abs', type: 'abstract', title: '摘要', content: [
+          { type: 'table', caption: '前置表', headers: ['A'], data: [['1']] },
+        ] },
+        { id: 'c1', type: 'chapter', title: '第一章', content: [
+          { type: 'table', caption: '第一个表', headers: ['A'], data: [['1']] },
+          { type: 'table', caption: '第二个表', headers: ['B'], data: [['2']] },
+        ] },
+        { id: 'c2', type: 'chapter', title: '第二章', content: [
+          { type: 'figure', path: 'missing.png', caption: '一个图' },
+        ] },
+      ],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+
+  // Front matter is outside a chapter, so its caption is 表1; chapters restart.
+  // The number and the title are separate runs (the number carries the bookmark),
+  // so each is asserted on its own.
+  // The caption is one paragraph: the number run (inside the bookmark), then the
+  // title run. Parse the paragraph that contains the title rather than guessing
+  // from a character window.
+  const captionText = (title) => {
+    const at = xml.indexOf(title);
+    assert.ok(at > 0, `expected the caption ${title}`);
+    const open = xml.lastIndexOf('<w:p>', at);
+    const close = xml.indexOf('</w:p>', at);
+    const paragraph = xml.slice(open, close);
+    const runs = [...paragraph.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map(m => m[1]);
+    return runs[0]?.trim() ?? '';
+  };
+  assert.equal(captionText('前置表'), '表1');
+  assert.equal(captionText('第一个表'), '表1-1');
+  assert.equal(captionText('第二个表'), '表1-2');
+  assert.equal(captionText('一个图'), '图2-1');
+});
+
+test('a reference to a caption that does not exist warns instead of emitting a broken field', async () => {
+  // A REF field pointing at a missing bookmark makes Word print
+  // "Error! Reference source not found." — and nothing said so before.
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const buffer = await renderDocument({
+      template,
+      document: {
+        type: 'thesis', meta: { title: 'Dangling', degree: 'master', date: '2026' }, cover: [],
+        sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+          { type: 'paragraph', text: '见[[表9-9]]。' },
+        ] }],
+      },
+    });
+    const { xml } = await documentXml(buffer);
+    assert.doesNotMatch(xml, /<w:fldSimple/);
+    assert.match(xml, /\[\[表9-9\]\]/, 'the reference is left as text');
+  } finally {
+    console.warn = original;
+  }
+  assert.ok(warnings.some(w => w.includes('表9-9')), `expected a warning, got: ${JSON.stringify(warnings)}`);
+});
+
+test('a reference can name a block by id, which survives automatic numbering', async () => {
+  // The author cannot know the table will become 表3-1, so `[[表#tab2]]` resolves
+  // through the block id instead.
+  const buffer = await renderDocument({
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'By id', degree: 'master', date: '2026' }, cover: [],
+      sections: [{ id: 'c1', type: 'chapter', title: 'C', content: [
+        { type: 'paragraph', text: '见[[表#tab2]]。' },
+        { type: 'table', id: 'tab2', caption: '第二表', headers: ['A'], data: [['1']] },
+      ] }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const bookmark = xml.match(/<w:bookmarkStart[^>]*w:name="([^"]+)"/)?.[1];
+  const target = xml.match(/<w:fldSimple w:instr=" REF ([^ \\"]+)/)?.[1];
+  assert.ok(bookmark, 'expected the caption bookmark');
+  assert.equal(target, bookmark, 'the field must point at that caption');
+});
