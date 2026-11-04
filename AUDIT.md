@@ -356,3 +356,19 @@ The rest of the review backlog, plus the PDF feature from the long-stale PR #2.
 | G-8 | PR #2 (`codex/v3-advanced-omml`) had been open since 2026-08-31 with two commits of real work — text-based PDF template inference — based on pre-audit code, so it could no longer merge. | `git merge-base` = `1ada918e`; 9 conflicted files | Integrated in #8: replayed onto `main`, conflicts resolved by hand so nothing from #4/#7 was reverted, 3 PDF tests carried over. Adds `parsePdfTemplate` (`pdfjs-dist`), `thesis parse <template.docx\\|pdf>`, and a README scope note |
 
 `pnpm check`: 145 tests, all passing.
+
+---
+
+## 8. Template-fidelity round
+
+The three holes left in the "template-driven" promise, plus the journal front
+matter that was still hardcoded.
+
+| # | Finding | Evidence | Status |
+|---|---|---|---|
+| F-1 | Character units were converted with the style's **own** font size, before the `basedOn` chain was resolved. A style that inherits 10.5pt converted with the 12pt fallback. | A style `basedOn` a 10.5pt parent, `w:firstLineChars="200"` parsed to 480 twips; 420 is right. A style declaring 10.5pt itself got 420 | Fixed — the raw counts (`firstLineChars`, `leftChars`, `rightChars`, `beforeLines`, `afterLines`) are carried through the merge and converted in `rawToParagraphStyle`, where the inherited size is known. `mergeParagraphProps` also drops an inherited unit form when a style declares the twips form explicitly, so `override` still wins |
+| F-2 | The template's `TOC1` / `TOC2` / `TOC3` styles were parsed and mapped to the `toc_entry` role, but the renderer never requested that role and the generated package carried none of those style ids — so the entries Word generates kept Word's own formatting. | `roleWinners.toc_entry = "TOC1"`; no `TOC1` in the emitted `styles.xml` | Fixed — `tocEntryStyles()` translates the template's three directory styles into the package's paragraph styles |
+| F-3 | `w:docGrid` was neither parsed nor written. The writer library always emits `linePitch="360"`; the university template snaps the body to 312. | no `docGrid` anywhere in the parser or renderer | Fixed — `PageSettings.docGrid`, read from each `w:sectPr`, written back into the generated `document.xml` by the post-pass. The *shipped* asset still has no `docGrid`, because it was generated before this change and its source `.docx` is not in the repository; re-parsing it will fill the field in |
+| F-4 | The journal front matter (title, authors, affiliations, abstract, keywords) was built from literal font, size and spacing values — seven `font: { ascii: … }` literals and zero `resolveStyle` calls — while the body already went through the template. | — | Fixed — five roles added to `StyleRole` (`journal_title`, `journal_author`, `journal_affiliation`, `journal_abstract`, `journal_keywords`) with fallbacks in the renderer, and every front-matter paragraph now resolves through `resolveStyle` |
+
+`pnpm check`: 150 tests, all passing.

@@ -226,8 +226,26 @@ interface RawStyle {
 
 interface RawParagraphProps {
   alignment?: string;
-  indent?: { firstLine?: number; left?: number; right?: number; hanging?: number };
-  spacing?: { before?: number; after?: number; line?: number; lineRule?: string };
+  /**
+   * Indent, in twips, alongside the raw character-unit counts Word writes next
+   * to them.
+   *
+   * `w:firstLineChars` / `w:leftChars` / `w:rightChars` are hundredths of a
+   * *character*, and a character is as wide as the style's **effective** font
+   * size — the inherited one, not the one the style happens to declare. The
+   * conversion therefore cannot happen while this bag is being read: the
+   * inheritance chain is resolved afterwards. The raw counts are carried here
+   * and converted in `rawToParagraphStyle`, where the merged run size is known.
+   */
+  indent?: {
+    firstLine?: number; left?: number; right?: number; hanging?: number;
+    firstLineChars?: number; leftChars?: number; rightChars?: number;
+  };
+  spacing?: {
+    before?: number; after?: number; line?: number; lineRule?: string;
+    /** `w:beforeLines` / `w:afterLines`: hundredths of a line, converted later. */
+    beforeLines?: number; afterLines?: number;
+  };
   outlineLvl?: number;
   keepNext?: boolean;
   keepLines?: boolean;
@@ -308,10 +326,11 @@ function extractParagraphProps(pPr: any, runSize?: number): RawParagraphProps | 
   const props: RawParagraphProps = {};
 
   // `*Chars` (indent) and `*Lines` (spacing) are hundredths of a unit, not
-  // twips. Converting needs the run size: twips = units × halfPoints / 10 — two
-  // characters at 12pt is 480 twips, and one 12pt line is 240.
-  const effectiveSize = runSize && runSize > 0 ? runSize : 24; // 12pt fallback
-  const unitsToTwips = (units: number) => Math.round((units * effectiveSize) / 10);
+  // `*Chars` (indent) and `*Lines` (spacing) are hundredths of a unit, not
+  // twips, and they can only be converted once the style's **inherited** font
+  // size is known — `runSize` is only what this one style declares. The raw
+  // counts are stored here and converted in `rawToParagraphStyle`.
+  void runSize;
 
   // Alignment
   const jc = pPr['w:jc']?.['@_w:val'];
@@ -335,13 +354,13 @@ function extractParagraphProps(pPr: any, runSize?: number): RawParagraphProps | 
     // twips value beside it is derived from whatever size the paragraph had at
     // the time, so it goes stale — two characters at 12pt is 480 twips, not the
     // 200 Word left behind. `w:leftChars` / `w:rightChars` behave the same way.
-    if (!isNaN(firstLineChars)) props.indent.firstLine = unitsToTwips(firstLineChars);
+    if (!isNaN(firstLineChars)) props.indent.firstLineChars = firstLineChars;
     else if (!isNaN(firstLine)) props.indent.firstLine = firstLine;
 
-    if (!isNaN(leftChars)) props.indent.left = unitsToTwips(leftChars);
+    if (!isNaN(leftChars)) props.indent.leftChars = leftChars;
     else if (!isNaN(left)) props.indent.left = left;
 
-    if (!isNaN(rightChars)) props.indent.right = unitsToTwips(rightChars);
+    if (!isNaN(rightChars)) props.indent.rightChars = rightChars;
     else if (!isNaN(right)) props.indent.right = right;
 
     // A hanging indent is separate from a first-line indent and was dropped
@@ -363,9 +382,9 @@ function extractParagraphProps(pPr: any, runSize?: number): RawParagraphProps | 
     const after = parseInt(spacing['@_w:after']);
     const afterLines = parseInt(spacing['@_w:afterLines']);
     const line = parseInt(spacing['@_w:line']);
-    if (!isNaN(beforeLines)) props.spacing.before = unitsToTwips(beforeLines);
+    if (!isNaN(beforeLines)) props.spacing.beforeLines = beforeLines;
     else if (!isNaN(before)) props.spacing.before = before;
-    if (!isNaN(afterLines)) props.spacing.after = unitsToTwips(afterLines);
+    if (!isNaN(afterLines)) props.spacing.afterLines = afterLines;
     else if (!isNaN(after)) props.spacing.after = after;
     if (!isNaN(line)) {
       props.spacing.line = line;
@@ -542,16 +561,43 @@ function mergeParagraphProps(
   if (!base && !override) return undefined;
   if (!base) return override;
   if (!override) return base;
-  return {
-    ...base,
-    ...override,
-    indent: (base.indent || override.indent)
-      ? { ...base.indent, ...override.indent }
-      : undefined,
-    spacing: (base.spacing || override.spacing)
-      ? { ...base.spacing, ...override.spacing }
-      : undefined,
-  };
+
+  const indent = (base.indent || override.indent)
+    ? { ...base.indent, ...override.indent }
+    : undefined;
+  const spacing = (base.spacing || override.spacing)
+    ? { ...base.spacing, ...override.spacing }
+    : undefined;
+
+  // A measurement has two forms — twips, and hundredths of a character or a
+  // line. A style that declares the twips form explicitly is overriding that
+  // measurement, not only the twips half of it, so the inherited character
+  // form must not survive to win the later conversion.
+  dropOverriddenUnits(indent, override.indent, [
+    ['firstLine', 'firstLineChars'],
+    ['left', 'leftChars'],
+    ['right', 'rightChars'],
+  ]);
+  dropOverriddenUnits(spacing, override.spacing, [
+    ['before', 'beforeLines'],
+    ['after', 'afterLines'],
+  ]);
+
+  return { ...base, ...override, indent, spacing };
+}
+
+/** Delete the unit-form key when the override declares the twips form instead. */
+function dropOverriddenUnits(
+  merged: Record<string, unknown> | undefined,
+  override: Record<string, unknown> | undefined,
+  pairs: readonly (readonly [string, string])[],
+): void {
+  if (!merged || !override) return;
+  for (const [twipsKey, unitsKey] of pairs) {
+    if (override[twipsKey] !== undefined && override[unitsKey] === undefined) {
+      delete merged[unitsKey];
+    }
+  }
 }
 
 function buildInheritanceMap(raw: Record<string, RawStyle>): Record<string, string> {
@@ -583,6 +629,29 @@ function definedOnly<T extends object>(value: T): T {
  * headings ended up rendered as body text.
  */
 function rawToParagraphStyle(raw: RawStyle): ParagraphStyle {
+  // `*Chars` / `*Lines` are hundredths of a character or a line. A character
+  // is as wide as the style's **effective** size — the inherited one — which is
+  // only known here, after the `basedOn` chain and the docDefaults merge have
+  // run. Using the style's own size produced 480 twips for a 10.5pt style that
+  // inherits its size, where 420 is right.
+  const effectiveSize = raw.rPr?.fontSize && raw.rPr.fontSize > 0 ? raw.rPr.fontSize : 24;
+  const unitsToTwips = (units: number) => Math.round((units * effectiveSize) / 10);
+  const indentFirstLine = raw.pPr?.indent?.firstLineChars !== undefined
+    ? unitsToTwips(raw.pPr.indent.firstLineChars)
+    : raw.pPr?.indent?.firstLine;
+  const indentLeft = raw.pPr?.indent?.leftChars !== undefined
+    ? unitsToTwips(raw.pPr.indent.leftChars)
+    : raw.pPr?.indent?.left;
+  const indentRight = raw.pPr?.indent?.rightChars !== undefined
+    ? unitsToTwips(raw.pPr.indent.rightChars)
+    : raw.pPr?.indent?.right;
+  const spaceBefore = raw.pPr?.spacing?.beforeLines !== undefined
+    ? unitsToTwips(raw.pPr.spacing.beforeLines)
+    : raw.pPr?.spacing?.before;
+  const spaceAfter = raw.pPr?.spacing?.afterLines !== undefined
+    ? unitsToTwips(raw.pPr.spacing.afterLines)
+    : raw.pPr?.spacing?.after;
+
   return definedOnly({
     font: definedOnly({
       name: raw.rPr?.fontName,
@@ -602,12 +671,12 @@ function rawToParagraphStyle(raw: RawStyle): ParagraphStyle {
       // style, then dropped here because the schema had no field for them.
       keepNext: raw.pPr?.keepNext,
       keepLines: raw.pPr?.keepLines,
-      firstLineIndent: raw.pPr?.indent?.firstLine,
+      firstLineIndent: indentFirstLine,
       hangingIndent: raw.pPr?.indent?.hanging,
-      leftIndent: raw.pPr?.indent?.left,
-      rightIndent: raw.pPr?.indent?.right,
-      spaceBefore: raw.pPr?.spacing?.before,
-      spaceAfter: raw.pPr?.spacing?.after,
+      leftIndent: indentLeft,
+      rightIndent: indentRight,
+      spaceBefore,
+      spaceAfter,
       outlineLevel: raw.pPr?.outlineLvl,
     }),
     lineSpacing: raw.pPr?.spacing?.line,
@@ -1000,6 +1069,21 @@ function sectPrToPageSettings(
   // university template numbers the front matter `upperRoman` from I and
   // restarts the body at arabic 1 — which is a `w:pgNumType` on the section,
   // never on the footer that prints the number.
+  // 文档网格: the line grid the template snaps text to. The writer library
+  // always emits its own `linePitch="360"`, so the renderer rewrites this into
+  // the generated section properties — without it a page breaks lines at
+  // different places than the template does.
+  const docGridElement = firstElement(sectPr["w:docGrid"]);
+  const docGridPitch = docGridElement ? parseInt(docGridElement["@_w:linePitch"]) : NaN;
+  const docGridCharSpace = docGridElement ? parseInt(docGridElement["@_w:charSpace"]) : NaN;
+  const docGridType = docGridElement?.["@_w:type"] as string | undefined;
+  const docGrid = docGridElement && (docGridType || !isNaN(docGridPitch) || !isNaN(docGridCharSpace))
+    ? {
+        ...(docGridType ? { type: docGridType } : {}),
+        ...(!isNaN(docGridPitch) ? { linePitch: docGridPitch } : {}),
+        ...(!isNaN(docGridCharSpace) ? { charSpace: docGridCharSpace } : {}),
+      }
+    : undefined;
   const pgNumType = firstElement(sectPr['w:pgNumType']);
   const pageNumberFormat = toPageNumberFormat(pgNumType?.['@_w:fmt']);
   const pageNumberStart = parseInt(pgNumType?.['@_w:start']);
@@ -1011,6 +1095,7 @@ function sectPrToPageSettings(
 
   return {
     width, height, margins, headerDistance, footerDistance, gutter, mirrorMargins, columns, columnGutter,
+    ...(docGrid && (docGrid.type || docGrid.linePitch !== undefined || docGrid.charSpace !== undefined) ? { docGrid } : {}),
     ...(pageNumberFormat ? { pageNumberFormat } : {}),
     ...(Number.isFinite(pageNumberStart) ? { pageNumberStart } : {}),
     ...(headers ? { headers } : {}),

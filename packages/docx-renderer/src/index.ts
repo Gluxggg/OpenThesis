@@ -19,7 +19,7 @@ import {
 } from 'docx';
 import type {
   ISectionOptions, ISectionPropertiesOptions, IPageNumberTypeAttributes,
-  MathComponent, INumberingOptions,
+  MathComponent, INumberingOptions, IParagraphStyleOptions,
 } from 'docx';
 import type {
   DocumentTemplate,
@@ -158,6 +158,33 @@ const THESIS_STYLES: Record<string, ParagraphStyle> = {
     font: { name: 'Times New Roman', eastAsia: '黑体', size: 21, bold: true },
     paragraph: { alignment: 'center', spaceBefore: 10, spaceAfter: 10 },
     lineSpacing: 312,
+  },
+  // Journal front matter. A journal article carries no template of its own in
+  // most workflows, so these are the defaults a bare `--type journal` build gets.
+  journal_title: {
+    font: { name: 'Times New Roman', eastAsia: '黑体', size: 32, bold: true },
+    paragraph: { alignment: 'center', spaceBefore: 240, spaceAfter: 120 },
+    lineSpacing: 312,
+  },
+  journal_author: {
+    font: { name: 'Times New Roman', eastAsia: '宋体', size: 21 },
+    paragraph: { alignment: 'center', spaceBefore: 120, spaceAfter: 60 },
+    lineSpacing: 312,
+  },
+  journal_affiliation: {
+    font: { name: 'Times New Roman', eastAsia: '宋体', size: 18, italic: true },
+    paragraph: { alignment: 'center', spaceBefore: 60, spaceAfter: 120 },
+    lineSpacing: 312,
+  },
+  journal_abstract: {
+    font: { name: 'Times New Roman', eastAsia: '宋体', size: 20 },
+    paragraph: { alignment: 'justified', leftIndent: 720, rightIndent: 720, spaceBefore: 120, spaceAfter: 60 },
+    lineSpacing: 240,
+  },
+  journal_keywords: {
+    font: { name: 'Times New Roman', eastAsia: '宋体', size: 20 },
+    paragraph: { alignment: 'justified', leftIndent: 720, rightIndent: 720, spaceBefore: 60, spaceAfter: 120 },
+    lineSpacing: 240,
   },
 };
 
@@ -1611,105 +1638,109 @@ function renderJournalArticle(
 ): (Paragraph | Table)[] {
   const children: (Paragraph | Table)[] = [];
 
-  // Title
-  children.push(
-    new Paragraph({
-      children: [
-        new TextRun({
-          text: doc.meta.title,
-          bold: true,
-          size: 32,
-          font: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', eastAsia: '黑体', cs: 'Times New Roman' },
-        }),
-      ],
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 240, after: 120, line: 312 },
-    })
-  );
+  // Front matter. Every piece resolves through `resolveStyle` against the
+  // template like any other block: this section used to bake its fonts, sizes
+  // and spacing in as literals, so a journal rendered from a journal template
+  // ignored that template completely.
+  const titleStyle = resolveStyle(template, 'journal_title', 'journal');
+  children.push(new Paragraph({
+    children: styledRuns(doc.meta.title, titleStyle, titleStyle.font.bold),
+    alignment: mapAlignment(titleStyle.paragraph.alignment),
+    spacing: {
+      before: titleStyle.paragraph.spaceBefore,
+      after: titleStyle.paragraph.spaceAfter,
+      ...lineStyle(titleStyle),
+    },
+  }));
 
-  // Authors
+  // Authors — one run per name, separated by a gap at the role's own size.
+  const authorStyle = resolveStyle(template, 'journal_author', 'journal');
   if (doc.meta.authors && doc.meta.authors.length > 0) {
     const authorRuns: TextRun[] = [];
     doc.meta.authors.forEach((author, index) => {
-      authorRuns.push(
-        new TextRun({
-          text: author.name + (author.isCorresponding ? '*' : ''),
-          size: 21,
-          font: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', eastAsia: '宋体', cs: 'Times New Roman' },
-        })
-      );
-      
+      authorRuns.push(new TextRun({
+        text: author.name + (author.isCorresponding ? '*' : ''),
+        size: authorStyle.font.size,
+        bold: authorStyle.font.bold,
+        italics: authorStyle.font.italic,
+        font: {
+          ascii: authorStyle.font.name,
+          hAnsi: authorStyle.font.name,
+          eastAsia: authorStyle.font.eastAsia,
+          cs: authorStyle.font.name,
+        },
+      }));
       if (index < doc.meta.authors.length - 1) {
-        authorRuns.push(new TextRun({ text: '  ', size: 21 }));
+        authorRuns.push(new TextRun({ text: '  ', size: authorStyle.font.size }));
       }
     });
-
-    children.push(
-      new Paragraph({
-        children: authorRuns,
-        alignment: AlignmentType.CENTER,
-        spacing: { before: 120, after: 60, line: 312 },
-      })
-    );
+    children.push(new Paragraph({
+      children: authorRuns,
+      alignment: mapAlignment(authorStyle.paragraph.alignment),
+      spacing: {
+        before: authorStyle.paragraph.spaceBefore,
+        after: authorStyle.paragraph.spaceAfter,
+        ...lineStyle(authorStyle),
+      },
+    }));
   }
 
   // Affiliations
+  const affiliationStyle = resolveStyle(template, 'journal_affiliation', 'journal');
   const allAffiliations: string[] = [];
   doc.meta.authors.forEach(author => {
     author.affiliations.forEach(aff => {
       const affStr = `${aff.institution}${aff.department ? ', ' + aff.department : ''}${aff.city ? ', ' + aff.city : ''}`;
-      if (!allAffiliations.includes(affStr)) {
-        allAffiliations.push(affStr);
-      }
+      if (!allAffiliations.includes(affStr)) allAffiliations.push(affStr);
     });
   });
-
   if (allAffiliations.length > 0) {
     const affText = allAffiliations.map((aff, i) => `(${i + 1}) ${aff}`).join('  ');
-    children.push(
-      new Paragraph({
-        children: [
-          new TextRun({
-            text: affText,
-            size: 18,
-            italics: true,
-            font: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', eastAsia: '宋体', cs: 'Times New Roman' },
-          }),
-        ],
-        alignment: AlignmentType.CENTER,
-        spacing: { before: 60, after: 120, line: 312 },
-      })
-    );
+    children.push(new Paragraph({
+      children: styledRuns(affText, affiliationStyle),
+      alignment: mapAlignment(affiliationStyle.paragraph.alignment),
+      spacing: {
+        before: affiliationStyle.paragraph.spaceBefore,
+        after: affiliationStyle.paragraph.spaceAfter,
+        ...lineStyle(affiliationStyle),
+      },
+    }));
   }
 
-  // Abstract Block
+  // 摘要 / 关键词. The bold label is part of the block: it takes the role's font
+  // but keeps its own weight, as the hardcoded version did.
+  const abstractStyle = resolveStyle(template, 'journal_abstract', 'journal');
   if (doc.meta.abstract) {
-    children.push(
-      new Paragraph({
-        children: [
-          new TextRun({ text: '摘  要：', bold: true, size: 20, font: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', eastAsia: '黑体', cs: 'Times New Roman' } }),
-          new TextRun({ text: doc.meta.abstract, size: 20, font: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', eastAsia: '宋体', cs: 'Times New Roman' } }),
-        ],
-        indent: { left: 720, right: 720 },
-        spacing: { before: 120, after: 60, line: 240 },
-        alignment: AlignmentType.JUSTIFIED,
-      })
-    );
+    children.push(new Paragraph({
+      children: [
+        ...styledRuns('摘  要：', abstractStyle, true),
+        ...styledRuns(doc.meta.abstract, abstractStyle),
+      ],
+      indent: indentOf(abstractStyle),
+      alignment: mapAlignment(abstractStyle.paragraph.alignment),
+      spacing: {
+        before: abstractStyle.paragraph.spaceBefore,
+        after: abstractStyle.paragraph.spaceAfter,
+        ...lineStyle(abstractStyle),
+      },
+    }));
   }
 
-  // Keywords
+  const keywordsStyle = resolveStyle(template, 'journal_keywords', 'journal');
   if (doc.meta.keywords && doc.meta.keywords.length > 0) {
-    children.push(
-      new Paragraph({
-        children: [
-          new TextRun({ text: '关键词：', bold: true, size: 20, font: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', eastAsia: '黑体', cs: 'Times New Roman' } }),
-          new TextRun({ text: doc.meta.keywords.join('；'), size: 20, font: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', eastAsia: '宋体', cs: 'Times New Roman' } }),
-        ],
-        indent: { left: 720, right: 720 },
-        spacing: { before: 60, after: 240, line: 240 },
-        alignment: AlignmentType.LEFT,
-      })
-    );
+    children.push(new Paragraph({
+      children: [
+        ...styledRuns('关键词：', keywordsStyle, true),
+        ...styledRuns(doc.meta.keywords.join('；'), keywordsStyle),
+      ],
+      indent: indentOf(keywordsStyle),
+      alignment: mapAlignment(keywordsStyle.paragraph.alignment),
+      spacing: {
+        before: keywordsStyle.paragraph.spaceBefore,
+        after: keywordsStyle.paragraph.spaceAfter,
+        ...lineStyle(keywordsStyle),
+      },
+    }));
   }
 
   // Divider line or spacer before body
@@ -2325,6 +2356,10 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
 
   const wordDoc = new Document({
     numbering: { config: LIST_NUMBERING },
+    // The 目录 is a field; Word builds its entries with the TOC1/TOC2/TOC3
+    // styles, so those must exist in the package or the template's own directory
+    // typography is silently ignored.
+    styles: { paragraphStyles: tocEntryStyles(template) },
     sections,
   });
 
@@ -2343,6 +2378,7 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   buffer = await postProcess(buffer, {
     mirrorMargins: Boolean(template.page.mirrorMargins),
     evenAndOddHeaders: evenReference || (Boolean(template.evenAndOddHeaders) && templateCarriesHeads),
+    docGrid: template.page.docGrid,
   });
 
   if (options.outputPath) {
@@ -2386,7 +2422,12 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
  */
 async function postProcess(
   buffer: Buffer,
-  options: { mirrorMargins: boolean; evenAndOddHeaders: boolean },
+  options: {
+    mirrorMargins: boolean;
+    evenAndOddHeaders: boolean;
+    /** `w:docGrid` from the template's section properties, when it declares one. */
+    docGrid?: { type?: string; linePitch?: number; charSpace?: number };
+  },
 ): Promise<Buffer> {
   const zip = await JSZip.loadAsync(buffer);
   let changed = false;
@@ -2439,6 +2480,29 @@ async function postProcess(
     }
   }
 
+  // 3. 文档网格. The writer library always emits its own `linePitch="360"`.
+  // A template that snaps text to a different grid needs its own values in the
+  // generated section properties, or a page breaks lines where the template
+  // would not.
+  if (options.docGrid && (options.docGrid.type || options.docGrid.linePitch !== undefined || options.docGrid.charSpace !== undefined)) {
+    const document = zip.file('word/document.xml');
+    if (document) {
+      const original = await document.async('string');
+      const gridAttributes = [
+        options.docGrid.type ? `w:type="${options.docGrid.type}"` : '',
+        options.docGrid.linePitch !== undefined ? `w:linePitch="${options.docGrid.linePitch}"` : '',
+        options.docGrid.charSpace !== undefined ? `w:charSpace="${options.docGrid.charSpace}"` : '',
+      ].filter(Boolean).join(' ');
+      const patched = original.includes('<w:docGrid')
+        ? original.replace(/<w:docGrid[^>]*\/>/g, `<w:docGrid ${gridAttributes}/>`)
+        : original;
+      if (patched !== original) {
+        zip.file('word/document.xml', patched);
+        changed = true;
+      }
+    }
+  }
+
   if (!changed) return buffer;
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
@@ -2476,6 +2540,51 @@ export async function renderLegacy(
     headerText: legacy.report_header,
     contentDir,
   });
+}
+
+/**
+ * Paragraph styles for the table-of-contents entries Word generates.
+ *
+ * The renderer emits a real `TOC` field, and Word fills it with one paragraph
+ * per heading, styled `TOC1` / `TOC2` / `TOC3`. The generated package carried
+ * none of those style ids, so the entries fell back to Word's own defaults even
+ * when the template had parsed its `TOC1` style and mapped it to the `toc_entry`
+ * role — the role was parsed and then never requested.
+ */
+function tocEntryStyles(template: DocumentTemplate): IParagraphStyleOptions[] {
+  const styles: IParagraphStyleOptions[] = [];
+  for (const level of [1, 2, 3] as const) {
+    const id = `TOC${level}`;
+    const source = template.styles?.[id];
+    if (!source) continue;
+    const line = lineStyle(source);
+    styles.push({
+      id,
+      name: `TOC ${level}`,
+      quickFormat: true,
+      run: {
+        size: source.font.size,
+        bold: source.font.bold,
+        italics: source.font.italic,
+        font: {
+          ascii: source.font.name,
+          hAnsi: source.font.name,
+          eastAsia: source.font.eastAsia,
+          cs: source.font.name,
+        },
+      },
+      paragraph: {
+        alignment: mapAlignment(source.paragraph.alignment),
+        indent: indentOf(source),
+        spacing: {
+          before: source.paragraph.spaceBefore,
+          after: source.paragraph.spaceAfter,
+          ...line,
+        },
+      },
+    });
+  }
+  return styles;
 }
 
 // ── Utility ───────────────────────────────────────────────
