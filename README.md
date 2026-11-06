@@ -45,43 +45,6 @@ For **university theses**, **journal articles**, and **government official docum
 | Markdown → LaTeX (pandoc/ThesisForge)   | Markdown or structured JSON → editable **DOCX**                         |
 | Single document type                    | **Thesis + Journal + 公文** — one engine, three domains                   |
 
-## What it does
-
-```mermaid
-graph TD
-    %% Nodes and Groups
-    subgraph Inputs ["1. Input Sources"]
-        A["📄 Template Reference (.docx or text PDF) <br> (e.g. university, journal, GB/T 9704)"]
-        B["✍️ Markdown or JSON Content <br> (thesis, journal, official document)"]
-    end
-
-    subgraph Core ["2. Processing Engine (OpenThesis Core)"]
-        C["⚙️ @openthesis/template-parser <br> (Extracts styles & layouts)"]
-        D["🔍 @openthesis/markdown-parser + schema <br> (Creates typed document structures)"]
-        E["🎨 @openthesis/docx-renderer <br> (Generates final layout dynamically)"]
-    end
-
-    subgraph Output ["3. Final Output"]
-        F["🎓 Submission-Ready Document (.docx) <br> (High-fidelity typesetting)"]
-    end
-
-    %% Flows
-    A --> C
-    B --> D
-    C --> E
-    D --> E
-    E --> F
-
-    %% Styling
-    classDef inputStyle fill:#f4f5f7,stroke:#c1c7d0,stroke-width:2px,color:#172b4d;
-    classDef coreStyle fill:#deebff,stroke:#0052cc,stroke-width:2px,color:#0747a6;
-    classDef outputStyle fill:#e6fcf5,stroke:#087f5b,stroke-width:2px,color:#095b42;
-
-    class A,B inputStyle;
-    class C,D,E coreStyle;
-    class F outputStyle;
-```
-
 ## PDF template support
 
 Many universities, journals, and government agencies publish their formatting guides or sample documents only as PDF. OpenThesis can now parse a **text-based PDF** and infer the reusable OpenThesis template that drives DOCX output.
