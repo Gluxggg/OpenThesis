@@ -29,6 +29,12 @@
 
 ---
 
+<p align="center">
+  <img src="assets/how-it-works.png" alt="OpenThesis 工作流程图：DOCX 或文本型 PDF 模板参照与 Markdown 或 JSON 内容交由解析器处理，再由 DOCX 渲染器生成可直接提交的文档" width="100%" />
+</p>
+
+---
+
 ## 为什么选择 OpenThesis？
 
 | 传统方案 | OpenThesis |

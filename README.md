@@ -29,6 +29,12 @@ For **university theses**, **journal articles**, and **government official docum
 
 ---
 
+<p align="center">
+  <img src="assets/how-it-works.png" alt="How OpenThesis works: a DOCX or text-based PDF template reference and Markdown or JSON content feed the parser packages, and the DOCX renderer produces a submission-ready .docx" width="100%" />
+</p>
+
+---
+
 ## Why?
 
 | Existing tools                          | OpenThesis                                                              |
