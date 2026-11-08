@@ -1,10 +1,12 @@
 import type {
   BlockType,
+  BorderSpec,
   DocumentTemplate,
   PageSettings,
   ParagraphFormatting,
   ParagraphStyle,
   RunningHeadSlots,
+  TableFormat,
   TemplateMeta,
 } from '@openthesis/document-schema';
 
@@ -115,6 +117,8 @@ export async function parsePdfTemplate(
   const sampledPages = Math.min(pdf.numPages, MAX_SAMPLED_PAGES);
   const lines: PdfLine[] = [];
   const pageSizes: Array<{ width: number; height: number }> = [];
+  const rules: PdfRule[] = [];
+  const filledRects: PdfFilledRect[] = [];
 
   try {
     for (let pageNumber = 1; pageNumber <= sampledPages; pageNumber += 1) {
@@ -123,8 +127,12 @@ export async function parsePdfTemplate(
       pageSizes.push({ width: viewport.width, height: viewport.height });
       // `content.styles` only carries a fallback CSS family ("sans-serif"),
       // which used to become Arial for every Chinese font. The real name lives
-      // on the page's font objects, so it is read from there first.
-      const fontNames = await readFontNames(page as unknown as FontNameSource, OPS.setFont);
+      // on the page's font objects, so it is read from there first. The same
+      // operator list also carries the drawn rules a table is made of.
+      const graphics = await readPageGraphics(page as unknown as FontNameSource, OPS as unknown as OpCodes);
+      rules.push(...graphics.rules.map(rule => ({ ...rule, page: pageNumber, pageHeight: viewport.height })));
+      filledRects.push(...graphics.fills.map(rect => ({ ...rect, page: pageNumber })));
+      const fontNames = graphics.fontNames;
       const content = await page.getTextContent();
       const items = content.items
         .filter(item => 'str' in item && Boolean(item.str.trim()))
@@ -153,6 +161,7 @@ export async function parsePdfTemplate(
     ...inferPageSettings(pageSizes[0], lines, body),
     ...inferRunningHeads(lines, body),
   };
+  const tableFormat = inferTableFormat(rules, filledRects);
   const styles: Record<string, ParagraphStyle> = {};
   const styleRoles: Record<string, BlockType> = {};
   const headingClusters = clusters
@@ -194,44 +203,293 @@ export async function parsePdfTemplate(
     // A head that differs by parity only prints correctly when Word is told the
     // document uses odd and even heads.
     evenAndOddHeaders: Boolean(page.headers?.even || page.footers?.even),
+    ...(tableFormat ? { tableFormat } : {}),
     styles,
     styleRoles,
   };
 }
 
 /**
- * The real font name behind each text-content font id.
+ * The operator codes this file needs from `pdfjs-dist`.
  *
- * PDF.js reports `sans-serif` / `serif` / `monospace` as the CSS family of an
- * embedded font and keeps the PostScript name on the font object instead. This
- * reads the operator list once per page, which is what loads those objects, and
- * maps each id to `BCDEEE+SimSun` and friends. A page whose operators cannot be
- * read still yields its text; the caller falls back to the CSS family then.
+ * The values are stable and come from the module itself; declaring the shape
+ * here keeps the dynamic import in one place.
  */
-async function readFontNames(
-  page: FontNameSource,
-  setFontOperator: number,
-): Promise<Map<string, string>> {
-  const names = new Map<string, string>();
+interface OpCodes {
+  setFont: number;
+  setLineWidth: number;
+  setStrokeRGBColor: number;
+  setFillRGBColor: number;
+  constructPath: number;
+  stroke: number;
+  closeStroke: number;
+  fill: number;
+  eoFill: number;
+  fillStroke: number;
+  eoFillStroke: number;
+  closeFillStroke: number;
+  closeEOFillStroke: number;
+}
+
+/** A drawn rule: one stroke segment, or one very thin filled rectangle. */
+interface PdfRule {
+  page: number;
+  /** Height of the page the rule was drawn on, for the header/footer bands. */
+  pageHeight?: number;
+  orientation: 'horizontal' | 'vertical';
+  /** Baseline coordinate: y for a horizontal rule, x for a vertical one. */
+  position: number;
+  start: number;
+  end: number;
+  /** Rendered thickness, in points. */
+  width: number;
+  color: string;
+}
+
+/** A filled rectangle large enough to be a cell shading rather than a rule. */
+interface PdfFilledRect {
+  page: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  color: string;
+}
+
+interface PageGraphics {
+  fontNames: Map<string, string>;
+  rules: PdfRule[];
+  fills: PdfFilledRect[];
+}
+
+/** Segments shorter than this are underlines or decoration, not table rules. */
+const MIN_RULE_LENGTH = 24;
+/** A path this close to horizontal/vertical is a rule. */
+const RULE_TOLERANCE = 1;
+/** A filled rectangle thinner than this is a rule, not a shaded cell. */
+const THIN_FILL = 2.5;
+
+/**
+ * Read one page's operator list once for the two things it is needed for: the
+ * real font names behind the text, and the drawn rules a table is made of.
+ *
+ * A page whose operators cannot be read still yields its text; the caller falls
+ * back to the CSS family then.
+ */
+async function readPageGraphics(page: FontNameSource, ops: OpCodes): Promise<PageGraphics> {
+  const fontNames = new Map<string, string>();
+  const rules: PdfRule[] = [];
+  const fills: PdfFilledRect[] = [];
   let operators: { fnArray: number[]; argsArray: unknown[] };
   try {
     operators = await page.getOperatorList();
   } catch {
-    return names;
+    return { fontNames, rules, fills };
   }
 
-  const ids = new Set<string>();
+  const fontIds = new Set<string>();
+  let lineWidth = 1;
+  let strokeColor = '#000000';
+  let fillColor = '#000000';
+
   for (let index = 0; index < operators.fnArray.length; index += 1) {
-    if (operators.fnArray[index] !== setFontOperator) continue;
+    const fn = operators.fnArray[index];
     const args = operators.argsArray[index] as unknown[] | undefined;
-    const id = args?.[0];
-    if (typeof id === 'string' && id) ids.add(id);
+    if (fn === ops.setFont) {
+      const id = args?.[0];
+      if (typeof id === 'string' && id) fontIds.add(id);
+      continue;
+    }
+    if (fn === ops.setLineWidth) {
+      const value = Number(args?.[0]);
+      if (Number.isFinite(value) && value > 0) lineWidth = value;
+      continue;
+    }
+    if (fn === ops.setStrokeRGBColor) {
+      strokeColor = String(args?.[0] ?? strokeColor);
+      continue;
+    }
+    if (fn === ops.setFillRGBColor) {
+      fillColor = String(args?.[0] ?? fillColor);
+      continue;
+    }
+    if (fn !== ops.constructPath) continue;
+    collectPath(args, ops, lineWidth, strokeColor, fillColor, rules, fills);
   }
-  for (const id of ids) {
+
+  for (const id of fontIds) {
     const name = fontObjectName(page, id);
-    if (name) names.set(id, name);
+    if (name) fontNames.set(id, name);
   }
-  return names;
+  return { fontNames, rules, fills };
+}
+
+function collectPath(
+  args: unknown[] | undefined,
+  ops: OpCodes,
+  lineWidth: number,
+  strokeColor: string,
+  fillColor: string,
+  rules: PdfRule[],
+  fills: PdfFilledRect[],
+): void {
+  const paint = Number(args?.[0]);
+  const pathList = arrayLike(args?.[1]);
+  if (!pathList) return;
+  const paintsStroke = paint === ops.stroke || paint === ops.closeStroke
+    || paint === ops.fillStroke || paint === ops.eoFillStroke
+    || paint === ops.closeFillStroke || paint === ops.closeEOFillStroke;
+  const paintsFill = paint === ops.fill || paint === ops.eoFill
+    || paint === ops.fillStroke || paint === ops.eoFillStroke
+    || paint === ops.closeFillStroke || paint === ops.closeEOFillStroke;
+  if (!paintsStroke && !paintsFill) return;
+
+  for (const raw of pathList) {
+    // pdf.js hands the segment list back as a plain object keyed `0,1,2,…`
+    // rather than as a real array in the legacy build.
+    const path = toNumberArray(raw);
+    if (!path) continue;
+    if (paintsStroke) {
+      for (const segment of pathSegments(path)) {
+        const dx = Math.abs(segment.x1 - segment.x0);
+        const dy = Math.abs(segment.y1 - segment.y0);
+        if (dy <= RULE_TOLERANCE && dx >= MIN_RULE_LENGTH) {
+          rules.push({
+            page: 0,
+            orientation: 'horizontal',
+            position: (segment.y0 + segment.y1) / 2,
+            start: Math.min(segment.x0, segment.x1),
+            end: Math.max(segment.x0, segment.x1),
+            width: lineWidth,
+            color: strokeColor,
+          });
+        } else if (dx <= RULE_TOLERANCE && dy >= MIN_RULE_LENGTH) {
+          rules.push({
+            page: 0,
+            orientation: 'vertical',
+            position: (segment.x0 + segment.x1) / 2,
+            start: Math.min(segment.y0, segment.y1),
+            end: Math.max(segment.y0, segment.y1),
+            width: lineWidth,
+            color: strokeColor,
+          });
+        }
+      }
+    }
+
+    if (!paintsFill) continue;
+    const box = pathBounds(path);
+    if (!box) continue;
+    const width = box.x1 - box.x0;
+    const height = box.y1 - box.y0;
+    if (height <= THIN_FILL && width >= MIN_RULE_LENGTH) {
+      rules.push({
+        page: 0,
+        orientation: 'horizontal',
+        position: (box.y0 + box.y1) / 2,
+        start: box.x0,
+        end: box.x1,
+        width: Math.max(height, 0.3),
+        color: fillColor,
+      });
+    } else if (width <= THIN_FILL && height >= MIN_RULE_LENGTH) {
+      rules.push({
+        page: 0,
+        orientation: 'vertical',
+        position: (box.x0 + box.x1) / 2,
+        start: box.y0,
+        end: box.y1,
+        width: Math.max(width, 0.3),
+        color: fillColor,
+      });
+    } else if (height > THIN_FILL) {
+      fills.push({ page: 0, x0: box.x0, y0: box.y0, x1: box.x1, y1: box.y1, color: fillColor });
+    }
+  }
+}
+
+/** pdf.js sometimes hands back a plain object keyed `0,1,2,…` for an array. */
+function arrayLike(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record)
+    .filter(key => /^\d+$/.test(key))
+    .sort((a, b) => Number(a) - Number(b));
+  return keys.length > 0 ? keys.map(key => record[key]) : null;
+}
+
+function toNumberArray(value: unknown): number[] | null {
+  const list = arrayLike(value);
+  if (!list) return null;
+  const numbers = list.map(Number);
+  return numbers.every(Number.isFinite) ? numbers : null;
+}
+
+function pathSegments(path: number[]): Array<{ x0: number; y0: number; x1: number; y1: number }> {
+  const segments: Array<{ x0: number; y0: number; x1: number; y1: number }> = [];
+  let x = 0;
+  let y = 0;
+  let startX = 0;
+  let startY = 0;
+  for (let index = 0; index < path.length;) {
+    const command = path[index];
+    index += 1;
+    if (command === 0) {
+      x = path[index];
+      y = path[index + 1];
+      index += 2;
+      startX = x;
+      startY = y;
+    } else if (command === 1) {
+      const nextX = path[index];
+      const nextY = path[index + 1];
+      index += 2;
+      segments.push({ x0: x, y0: y, x1: nextX, y1: nextY });
+      x = nextX;
+      y = nextY;
+    } else if (command === 2) {
+      index += 4;
+      const nextX = path[index];
+      const nextY = path[index + 1];
+      index += 2;
+      segments.push({ x0: x, y0: y, x1: nextX, y1: nextY });
+      x = nextX;
+      y = nextY;
+    } else if (command === 3) {
+      segments.push({ x0: x, y0: y, x1: startX, y1: startY });
+      x = startX;
+      y = startY;
+    } else {
+      break;
+    }
+  }
+  return segments;
+}
+
+function pathBounds(path: number[]): { x0: number; y0: number; x1: number; y1: number } | null {
+  const points: Array<[number, number]> = [];
+  for (let index = 0; index < path.length;) {
+    const command = path[index];
+    index += 1;
+    if (command === 0 || command === 1) {
+      points.push([path[index], path[index + 1]]);
+      index += 2;
+    } else if (command === 2) {
+      for (let controls = 0; controls < 3; controls += 1) {
+        points.push([path[index], path[index + 1]]);
+        index += 2;
+      }
+    } else if (command === 3) {
+      continue;
+    } else {
+      return null;
+    }
+  }
+  if (points.length === 0) return null;
+  const xs = points.map(point => point[0]);
+  const ys = points.map(point => point[1]);
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
 }
 
 function fontObjectName(page: FontNameSource, id: string): string {
@@ -559,6 +817,154 @@ function cleanRunningText(text: string): string {
 /** `12`, `IV`, `iv` — a page number rather than a running head. */
 function isPageNumberText(text: string): boolean {
   return /^(?:\d{1,4}|[ivxlcdm]{1,7})$/i.test(text);
+}
+
+/** The `w:sz` values OOXML accepts, in eighths of a point. */
+const BORDER_SIZES = [2, 4, 6, 8, 12, 18, 24];
+
+/**
+ * The table the PDF's pages draw, read off its rules.
+ *
+ * A Chinese thesis draws three rules — top, under the header, bottom — with no
+ * verticals; a journal draws a full grid. The rules are grouped into rows and
+ * rows into a candidate table; the strongest candidate becomes the template's
+ * `tableFormat`, so rule weights carry into `w:sz` and a shaded header band
+ * becomes `headerFill`. One shape is kept because a template repeats it.
+ */
+function inferTableFormat(rules: PdfRule[], fills: PdfFilledRect[]): TableFormat | undefined {
+  // The 篇眉 rule under a running head is horizontal and wide, but it is not a
+  // table rule: left in, it merged with a three-line table as a fourth row.
+  const contentRules = rules.filter(rule => !inHeaderFooterBand(rule));
+  const horizontals = contentRules.filter(rule => rule.orientation === 'horizontal');
+  const verticals = contentRules.filter(rule => rule.orientation === 'vertical');
+  if (horizontals.length < 2) return undefined;
+
+  const rows = mergeRuleRows(horizontals);
+  // A border can be drawn per cell, and Word also emits hairline rules the eye
+  // does not read as part of the table (0.24 pt beside a 1.44 pt border). Rules
+  // much thinner than the table's strongest one are dropped before grouping, so
+  // a three-line table is not mistaken for a fully ruled one.
+  const strongest = Math.max(...rows.map(rule => rule.width));
+  const significant = rows.filter(rule => rule.width >= Math.max(0.2, strongest * 0.25));
+  const groups = groupRuleRows(significant);
+
+  let best: { rows: PdfRule[]; x0: number; x1: number; score: number } | undefined;
+  for (const group of groups) {
+    if (group.length < 2) continue;
+    const x0 = Math.min(...group.map(rule => rule.start));
+    const x1 = Math.max(...group.map(rule => rule.end));
+    const width = x1 - x0;
+    if (width < 80) continue;
+    const score = width * (Math.abs(group[0].position - group[group.length - 1].position) + 20);
+    if (!best || score > best.score) best = { rows: group, x0, x1, score };
+  }
+  if (!best) return undefined;
+
+  const ordered = [...best.rows].sort((a, b) => b.position - a.position);
+  const top = ordered[0];
+  const bottom = ordered[ordered.length - 1];
+  const borders: NonNullable<TableFormat['borders']> = {
+    top: ruleBorder(top),
+    bottom: ruleBorder(bottom),
+  };
+
+  const gridColumns = verticals.filter(column =>
+    column.start <= bottom.position + 2 && column.end >= top.position - 2
+  );
+  if (gridColumns.length >= 2) borders.insideV = ruleBorder(gridColumns[0]);
+  // An interior rule beyond the header one means the table draws every row.
+  if (ordered.length > 3) borders.insideH = ruleBorder(ordered[1]);
+
+  const format: TableFormat = { borders };
+  const headerRule = ordered.length >= 2 ? ordered[1] : undefined;
+  if (headerRule) {
+    const fill = fills.find(rect =>
+      rect.x0 <= best.x0 + 6 && rect.x1 >= best.x1 - 6
+      && rect.y0 <= headerRule.position + 3 && rect.y1 >= top.position - 3
+      && !isWhiteColor(rect.color)
+    );
+    if (fill) format.headerFill = normalizeColor(fill.color);
+  }
+  return format;
+}
+
+/** Collapse rules that share a row position — a stroke and a fill, say. */
+function mergeRuleRows(rules: PdfRule[]): PdfRule[] {
+  const sorted = [...rules].sort((a, b) => b.position - a.position);
+  const rows: PdfRule[] = [];
+  for (const rule of sorted) {
+    const current = rows[rows.length - 1];
+    if (current && Math.abs(current.position - rule.position) <= 2) {
+      current.position = (current.position + rule.position) / 2;
+      current.start = Math.min(current.start, rule.start);
+      current.end = Math.max(current.end, rule.end);
+      current.width = Math.max(current.width, rule.width);
+      continue;
+    }
+    rows.push({ ...rule });
+  }
+  return rows;
+}
+
+/** Group rows that overlap horizontally and sit close enough to be one table. */
+function groupRuleRows(rows: PdfRule[]): PdfRule[][] {
+  const groups: PdfRule[][] = [];
+  for (const row of rows) {
+    const group = groups[groups.length - 1];
+    if (group) {
+      const previous = group[group.length - 1];
+      const gap = Math.abs(previous.position - row.position);
+      const overlap = Math.min(previous.end, row.end) - Math.max(previous.start, row.start);
+      const minWidth = Math.min(previous.end - previous.start, row.end - row.start);
+      if (gap <= 260 && overlap >= minWidth * 0.5) {
+        group.push(row);
+        continue;
+      }
+    }
+    groups.push([row]);
+  }
+  return groups;
+}
+
+function ruleBorder(rule: PdfRule): BorderSpec {
+  return {
+    style: 'single',
+    size: ooxmlBorderSize(rule.width),
+    color: normalizeColor(rule.color),
+  };
+}
+
+function ooxmlBorderSize(points: number): number {
+  const eighths = points * 8;
+  let best = BORDER_SIZES[0];
+  for (const size of BORDER_SIZES) {
+    if (Math.abs(size - eighths) < Math.abs(best - eighths)) best = size;
+  }
+  return best;
+}
+
+/** `#RRGGBB` / `#RGB` → the `w:color` form, or black when the value is unknown. */
+function normalizeColor(value: string): string {
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value.slice(1).toUpperCase();
+  if (/^#[0-9a-f]{3}$/i.test(value)) {
+    return value.slice(1).split('').map(char => char + char).join('').toUpperCase();
+  }
+  return '000000';
+}
+
+function isWhiteColor(value: string): boolean {
+  return normalizeColor(value) === 'FFFFFF';
+}
+
+/** A rule printed in the page's running-head or footer band. */
+function inHeaderFooterBand(rule: PdfRule): boolean {
+  const height = rule.pageHeight ?? 0;
+  if (height <= 0) return false;
+  const margin = height * 0.08;
+  if (rule.orientation === 'horizontal') {
+    return rule.position > height - margin || rule.position < margin;
+  }
+  return rule.end > height - margin || rule.start < margin;
 }
 
 /** A small line printed in the page's running-head or footer band. */

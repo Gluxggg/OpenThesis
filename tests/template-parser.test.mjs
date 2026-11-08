@@ -634,6 +634,54 @@ test('reads the running head and the footer page number out of the bands', async
   assert.equal(template.page.headers?.default?.text?.includes('Odd Head'), true);
 });
 
+test('reads a three-line table’s rules and header fill out of the PDF', async () => {
+  // A Chinese thesis table is three rules and a shaded header band; the
+  // renderer needs the rule weights (w:sz) and the fill (w:shd).
+  const template = await parsePdfTemplate(buildLinedPdf({
+    pages: [[
+      { text: 'The body text carries the bulk of the sampled characters.', x: 100, y: 640, size: 12 },
+      { text: 'so the dominant cluster is the paragraph style.', x: 100, y: 620, size: 12 },
+      { text: 'A third line makes the body cluster large enough to win.', x: 100, y: 600, size: 12 },
+    ]],
+    shapes: [[
+      { type: 'line', x1: 100, y1: 700, x2: 500, y2: 700, width: 1.5 },
+      { type: 'line', x1: 100, y1: 680, x2: 500, y2: 680, width: 0.5 },
+      { type: 'line', x1: 100, y1: 650, x2: 500, y2: 650, width: 1.5 },
+      { type: 'rect', x: 100, y: 680, w: 400, h: 20, color: '#D9D9D9' },
+    ]],
+  }), { documentType: 'thesis' });
+
+  assert.equal(template.tableFormat?.borders?.top?.size, 12);
+  assert.equal(template.tableFormat?.borders?.bottom?.size, 12);
+  assert.equal(template.tableFormat?.headerFill, 'D9D9D9');
+  // Three rules with no verticals is a three-line table, not a grid.
+  assert.equal(template.tableFormat?.borders?.insideV, undefined);
+});
+
+test('reads a full-grid table’s vertical rules', async () => {
+  const template = await parsePdfTemplate(buildLinedPdf({
+    pages: [[
+      { text: 'The body text carries the bulk of the sampled characters.', x: 100, y: 600, size: 12 },
+      { text: 'so the dominant cluster is the paragraph style.', x: 100, y: 580, size: 12 },
+      { text: 'A third line makes the body cluster large enough to win.', x: 100, y: 560, size: 12 },
+    ]],
+    shapes: [[
+      { type: 'line', x1: 100, y1: 700, x2: 500, y2: 700, width: 0.5 },
+      { type: 'line', x1: 100, y1: 680, x2: 500, y2: 680, width: 0.5 },
+      { type: 'line', x1: 100, y1: 660, x2: 500, y2: 660, width: 0.5 },
+      { type: 'line', x1: 100, y1: 640, x2: 500, y2: 640, width: 0.5 },
+      { type: 'line', x1: 100, y1: 640, x2: 100, y2: 700, width: 0.5 },
+      { type: 'line', x1: 300, y1: 640, x2: 300, y2: 700, width: 0.5 },
+      { type: 'line', x1: 500, y1: 640, x2: 500, y2: 700, width: 0.5 },
+    ]],
+  }), { documentType: 'thesis' });
+
+  assert.equal(template.tableFormat?.borders?.insideV?.size, 4);
+  assert.equal(template.tableFormat?.borders?.insideH?.size, 4);
+  // Four horizontal rules means every row is ruled, not just the header.
+  assert.equal(template.tableFormat?.borders?.top?.size, 4);
+});
+
 test('carries w:keepNext and w:keepLines through to the style', async () => {
   // Both flags were parsed into RawParagraphProps and merged into every resolved
   // style, but `ParagraphFormatting` had no field to hold them, so they were

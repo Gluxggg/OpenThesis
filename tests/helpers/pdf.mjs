@@ -36,7 +36,7 @@ export function buildTestPdf({ text = true } = {}) {
  * their PostScript names (`Helvetica-Bold`), which is what the parser reads to
  * recover bold and italic; an embedded font reports `sans-serif` instead.
  */
-export function buildLinedPdf({ pages = [[]], width = 612, height = 792 } = {}) {
+export function buildLinedPdf({ pages = [[]], shapes = [], width = 612, height = 792 } = {}) {
   const baseFonts = {
     regular: ['F1', 'Helvetica'],
     bold: ['F2', 'Helvetica-Bold'],
@@ -63,10 +63,12 @@ export function buildLinedPdf({ pages = [[]], width = 612, height = 792 } = {}) 
     .map(key => `/${baseFonts[key][0]} ${fontNumbers[key]} 0 R`)
     .join(' ');
   pages.forEach((lines, index) => {
-    const stream = lines.map(line => {
+    const drawing = (shapes[index] ?? []).map(shapeStream).join('\n');
+    const text = lines.map(line => {
       const [id] = baseFonts[line.font || 'regular'] || baseFonts.regular;
       return `BT /${id} ${line.size ?? 12} Tf 1 0 0 1 ${line.x ?? 72} ${line.y ?? 700} Tm (${escapePdfText(line.text)}) Tj ET`;
     }).join('\n');
+    const stream = [drawing, text].filter(Boolean).join('\n');
     objects[pageNumbers[index]] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /Font << ${fontResources} >> >> /Contents ${contentNumbers[index]} 0 R >>`;
     objects[contentNumbers[index]] = `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`;
   });
@@ -91,4 +93,27 @@ export function buildLinedPdf({ pages = [[]], width = 612, height = 792 } = {}) 
 
 function escapePdfText(text) {
   return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+}
+
+/**
+ * A drawn shape for `buildLinedPdf` — the table rules a PDF-inférence test
+ * needs. `line` strokes a segment; `rect` fills (or strokes) a rectangle, which
+ * is how Word draws a shaded header band.
+ */
+function shapeStream(shape) {
+  const color = pdfColor(shape.color ?? '#000000');
+  if (shape.type === 'line') {
+    const width = shape.width ?? 1;
+    return `${width} w ${color} RG ${shape.x1} ${shape.y1} m ${shape.x2} ${shape.y2} l S`;
+  }
+  const fill = shape.fill !== false;
+  const paint = fill ? 'f' : 'S';
+  return `${color} ${fill ? 'rg' : 'RG'} ${shape.x} ${shape.y} ${shape.w} ${shape.h} re ${paint}`;
+}
+
+function pdfColor(value) {
+  const hex = value.replace('#', '');
+  const full = hex.length === 3 ? hex.split('').map(char => char + char).join('') : hex;
+  const [red, green, blue] = [0, 2, 4].map(offset => (parseInt(full.slice(offset, offset + 2), 16) / 255).toFixed(3));
+  return `${red} ${green} ${blue}`;
 }
