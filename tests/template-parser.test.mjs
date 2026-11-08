@@ -653,6 +653,8 @@ test('reads a three-line table’s rules and header fill out of the PDF', async 
 
   assert.equal(template.tableFormat?.borders?.top?.size, 12);
   assert.equal(template.tableFormat?.borders?.bottom?.size, 12);
+  // The middle rule is its own border: 0.5 pt against 1.5 pt outer rules.
+  assert.equal(template.tableFormat?.headerBorder?.size, 4);
   assert.equal(template.tableFormat?.headerFill, 'D9D9D9');
   // Three rules with no verticals is a three-line table, not a grid.
   assert.equal(template.tableFormat?.borders?.insideV, undefined);
@@ -680,6 +682,47 @@ test('reads a full-grid table’s vertical rules', async () => {
   assert.equal(template.tableFormat?.borders?.insideH?.size, 4);
   // Four horizontal rules means every row is ruled, not just the header.
   assert.equal(template.tableFormat?.borders?.top?.size, 4);
+});
+
+test('applies the page transform before reading rules', async () => {
+  // The rules are drawn at y = 20/40/60 inside a `cm` that shifts them +650, so
+  // they land in the text column. Without the transform they would sit in the
+  // footer band, be dropped, and leave no table at all.
+  const template = await parsePdfTemplate(buildLinedPdf({
+    pages: [[
+      { text: 'The body text carries the bulk of the sampled characters.', x: 100, y: 600, size: 12 },
+      { text: 'so the dominant cluster is the paragraph style.', x: 100, y: 580, size: 12 },
+      { text: 'A third line makes the body cluster large enough to win.', x: 100, y: 560, size: 12 },
+    ]],
+    shapes: [[
+      { type: 'line', x1: 100, y1: 20, x2: 500, y2: 20, width: 0.5, matrix: [1, 0, 0, 1, 0, 650] },
+      { type: 'line', x1: 100, y1: 40, x2: 500, y2: 40, width: 0.5, matrix: [1, 0, 0, 1, 0, 650] },
+      { type: 'line', x1: 100, y1: 60, x2: 500, y2: 60, width: 0.5, matrix: [1, 0, 0, 1, 0, 650] },
+    ]],
+  }), { documentType: 'thesis' });
+
+  assert.ok(template.tableFormat, 'the translated rules should form a table');
+  assert.equal(template.tableFormat?.borders?.top?.size, 4);
+});
+
+test('warns when the PDF draws more than one table', async () => {
+  const template = await parsePdfTemplate(buildLinedPdf({
+    pages: [[
+      { text: 'The body text carries the bulk of the sampled characters.', x: 100, y: 500, size: 12 },
+      { text: 'so the dominant cluster is the paragraph style.', x: 100, y: 480, size: 12 },
+      { text: 'A third line makes the body cluster large enough to win.', x: 100, y: 460, size: 12 },
+    ]],
+    shapes: [[
+      { type: 'line', x1: 100, y1: 700, x2: 500, y2: 700, width: 0.5 },
+      { type: 'line', x1: 100, y1: 680, x2: 500, y2: 680, width: 0.5 },
+      { type: 'line', x1: 100, y1: 660, x2: 500, y2: 660, width: 0.5 },
+      { type: 'line', x1: 100, y1: 300, x2: 500, y2: 300, width: 0.5 },
+      { type: 'line', x1: 100, y1: 280, x2: 500, y2: 280, width: 0.5 },
+      { type: 'line', x1: 100, y1: 260, x2: 500, y2: 260, width: 0.5 },
+    ]],
+  }), { documentType: 'thesis' });
+
+  assert.match(template.meta.warnings.join('\n'), /2 separate table candidates/);
 });
 
 test('carries w:keepNext and w:keepLines through to the style', async () => {

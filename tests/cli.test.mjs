@@ -432,3 +432,34 @@ test('a scanned PDF is OCRed with ocrmypdf when the tool is on the path', () => 
   const template = JSON.parse(readFileSync(join(dir, 'scanned.template.json'), 'utf8'));
   assert.equal(template.meta.sourceFormat, 'pdf');
 });
+
+test('OPENTHESIS_OCR_COMMAND selects another OCR program', () => {
+  // The command is not tied to OCRmyPDF's installer: any program that writes a
+  // text-layer PDF with the same arguments can stand in.
+  const dir = mkdtempSync(join(tmpdir(), 'openthesis-cli-'));
+  const fake = join(dir, 'fake-ocr.mjs');
+  writeFileSync(fake, [
+    "import { writeFileSync } from 'node:fs';",
+    'const args = process.argv.slice(2);',
+    "if (!args.includes('--skip-text')) process.exit(0);",
+    'const out = args[args.length - 1];',
+    `writeFileSync(out, Buffer.from('${buildTestPdf().toString('base64')}', 'base64'));`,
+    '',
+  ].join('\n'));
+  const command = process.platform === 'win32' ? join(dir, 'my-ocr.cmd') : join(dir, 'my-ocr');
+  if (process.platform === 'win32') {
+    writeFileSync(command, `@echo off\r\n"${process.execPath}" "${fake}" %*\r\n`);
+  } else {
+    writeFileSync(command, `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`);
+    chmodSync(command, 0o755);
+  }
+
+  const input = join(dir, 'scanned.pdf');
+  writeFileSync(input, buildTestPdf({ text: false }));
+  const env = { ...process.env, OPENTHESIS_OCR_COMMAND: command };
+  const result = run(['parse', input], dir, env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /running local OCR with/);
+  const template = JSON.parse(readFileSync(join(dir, 'scanned.template.json'), 'utf8'));
+  assert.equal(template.meta.sourceFormat, 'pdf');
+});

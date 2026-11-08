@@ -101,6 +101,15 @@ function escapePdfText(text) {
  * is how Word draws a shaded header band.
  */
 function shapeStream(shape) {
+  const body = shapeBody(shape);
+  // `matrix: [a b c d e f]` draws the shape inside a `cm`, the way a page that
+  // scales or shifts its content does it.
+  return Array.isArray(shape.matrix) && shape.matrix.length === 6
+    ? `q ${shape.matrix.join(' ')} cm\n${body}\nQ`
+    : body;
+}
+
+function shapeBody(shape) {
   const color = pdfColor(shape.color ?? '#000000');
   if (shape.type === 'line') {
     const width = shape.width ?? 1;

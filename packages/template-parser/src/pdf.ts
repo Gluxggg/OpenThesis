@@ -161,7 +161,7 @@ export async function parsePdfTemplate(
     ...inferPageSettings(pageSizes[0], lines, body),
     ...inferRunningHeads(lines, body),
   };
-  const tableFormat = inferTableFormat(rules, filledRects);
+  const table = inferTableFormat(rules, filledRects);
   const styles: Record<string, ParagraphStyle> = {};
   const styleRoles: Record<string, BlockType> = {};
   const headingClusters = clusters
@@ -186,6 +186,11 @@ export async function parsePdfTemplate(
   if (lines.reduce((sum, line) => sum + line.text.length, 0) < sampledPages * 20) {
     warnings.push('Very little text was extracted; OCR or layout inference may be incomplete.');
   }
+  if (table.candidates > 1) {
+    warnings.push(
+      `The PDF draws ${table.candidates} separate table candidates; only one table shape can be recorded, so the largest was kept.`,
+    );
+  }
 
   return {
     meta: {
@@ -203,7 +208,7 @@ export async function parsePdfTemplate(
     // A head that differs by parity only prints correctly when Word is told the
     // document uses odd and even heads.
     evenAndOddHeaders: Boolean(page.headers?.even || page.footers?.even),
-    ...(tableFormat ? { tableFormat } : {}),
+    ...(table.format ? { tableFormat: table.format } : {}),
     styles,
     styleRoles,
   };
@@ -220,6 +225,9 @@ interface OpCodes {
   setLineWidth: number;
   setStrokeRGBColor: number;
   setFillRGBColor: number;
+  save: number;
+  restore: number;
+  transform: number;
   constructPath: number;
   stroke: number;
   closeStroke: number;
@@ -269,6 +277,28 @@ const RULE_TOLERANCE = 1;
 /** A filled rectangle thinner than this is a rule, not a shaded cell. */
 const THIN_FILL = 2.5;
 
+/** The PDF current transform matrix, as `[a, b, c, d, e, f]`. */
+type PdfMatrix = [number, number, number, number, number, number];
+const IDENTITY_MATRIX: PdfMatrix = [1, 0, 0, 1, 0, 0];
+
+/** Row-vector composition: `left` applied first, then `right`. */
+function multiplyMatrix(left: PdfMatrix, right: PdfMatrix): PdfMatrix {
+  const [a1, b1, c1, d1, e1, f1] = left;
+  const [a2, b2, c2, d2, e2, f2] = right;
+  return [
+    a1 * a2 + b1 * c2, a1 * b2 + b1 * d2,
+    c1 * a2 + d1 * c2, c1 * b2 + d1 * d2,
+    e1 * a2 + f1 * c2 + e2, e1 * b2 + f1 * d2 + f2,
+  ];
+}
+
+function applyMatrix(matrix: PdfMatrix, x: number, y: number): [number, number] {
+  return [
+    matrix[0] * x + matrix[2] * y + matrix[4],
+    matrix[1] * x + matrix[3] * y + matrix[5],
+  ];
+}
+
 /**
  * Read one page's operator list once for the two things it is needed for: the
  * real font names behind the text, and the drawn rules a table is made of.
@@ -291,10 +321,27 @@ async function readPageGraphics(page: FontNameSource, ops: OpCodes): Promise<Pag
   let lineWidth = 1;
   let strokeColor = '#000000';
   let fillColor = '#000000';
+  // A page may scale or translate its content (`cm`); rules are only meaningful
+  // in page coordinates, so the current transform is applied to every path.
+  let matrix: PdfMatrix = IDENTITY_MATRIX;
+  const matrixStack: PdfMatrix[] = [];
 
   for (let index = 0; index < operators.fnArray.length; index += 1) {
     const fn = operators.fnArray[index];
     const args = operators.argsArray[index] as unknown[] | undefined;
+    if (fn === ops.save) {
+      matrixStack.push(matrix);
+      continue;
+    }
+    if (fn === ops.restore) {
+      matrix = matrixStack.pop() ?? IDENTITY_MATRIX;
+      continue;
+    }
+    if (fn === ops.transform) {
+      const values = [0, 1, 2, 3, 4, 5].map(position => Number(args?.[position]));
+      if (values.every(Number.isFinite)) matrix = multiplyMatrix(values as PdfMatrix, matrix);
+      continue;
+    }
     if (fn === ops.setFont) {
       const id = args?.[0];
       if (typeof id === 'string' && id) fontIds.add(id);
@@ -314,7 +361,7 @@ async function readPageGraphics(page: FontNameSource, ops: OpCodes): Promise<Pag
       continue;
     }
     if (fn !== ops.constructPath) continue;
-    collectPath(args, ops, lineWidth, strokeColor, fillColor, rules, fills);
+    collectPath(args, ops, lineWidth, strokeColor, fillColor, rules, fills, matrix);
   }
 
   for (const id of fontIds) {
@@ -332,6 +379,7 @@ function collectPath(
   fillColor: string,
   rules: PdfRule[],
   fills: PdfFilledRect[],
+  matrix: PdfMatrix = IDENTITY_MATRIX,
 ): void {
   const paint = Number(args?.[0]);
   const pathList = arrayLike(args?.[1]);
@@ -350,7 +398,7 @@ function collectPath(
     const path = toNumberArray(raw);
     if (!path) continue;
     if (paintsStroke) {
-      for (const segment of pathSegments(path)) {
+      for (const segment of pathSegments(path, matrix)) {
         const dx = Math.abs(segment.x1 - segment.x0);
         const dy = Math.abs(segment.y1 - segment.y0);
         if (dy <= RULE_TOLERANCE && dx >= MIN_RULE_LENGTH) {
@@ -378,7 +426,7 @@ function collectPath(
     }
 
     if (!paintsFill) continue;
-    const box = pathBounds(path);
+    const box = pathBounds(path, matrix);
     if (!box) continue;
     const width = box.x1 - box.x0;
     const height = box.y1 - box.y0;
@@ -426,12 +474,20 @@ function toNumberArray(value: unknown): number[] | null {
   return numbers.every(Number.isFinite) ? numbers : null;
 }
 
-function pathSegments(path: number[]): Array<{ x0: number; y0: number; x1: number; y1: number }> {
+function pathSegments(
+  path: number[],
+  matrix: PdfMatrix = IDENTITY_MATRIX,
+): Array<{ x0: number; y0: number; x1: number; y1: number }> {
   const segments: Array<{ x0: number; y0: number; x1: number; y1: number }> = [];
   let x = 0;
   let y = 0;
   let startX = 0;
   let startY = 0;
+  const push = (fromX: number, fromY: number, toX: number, toY: number) => {
+    const [x0, y0] = applyMatrix(matrix, fromX, fromY);
+    const [x1, y1] = applyMatrix(matrix, toX, toY);
+    segments.push({ x0, y0, x1, y1 });
+  };
   for (let index = 0; index < path.length;) {
     const command = path[index];
     index += 1;
@@ -445,7 +501,7 @@ function pathSegments(path: number[]): Array<{ x0: number; y0: number; x1: numbe
       const nextX = path[index];
       const nextY = path[index + 1];
       index += 2;
-      segments.push({ x0: x, y0: y, x1: nextX, y1: nextY });
+      push(x, y, nextX, nextY);
       x = nextX;
       y = nextY;
     } else if (command === 2) {
@@ -453,11 +509,11 @@ function pathSegments(path: number[]): Array<{ x0: number; y0: number; x1: numbe
       const nextX = path[index];
       const nextY = path[index + 1];
       index += 2;
-      segments.push({ x0: x, y0: y, x1: nextX, y1: nextY });
+      push(x, y, nextX, nextY);
       x = nextX;
       y = nextY;
     } else if (command === 3) {
-      segments.push({ x0: x, y0: y, x1: startX, y1: startY });
+      push(x, y, startX, startY);
       x = startX;
       y = startY;
     } else {
@@ -467,13 +523,17 @@ function pathSegments(path: number[]): Array<{ x0: number; y0: number; x1: numbe
   return segments;
 }
 
-function pathBounds(path: number[]): { x0: number; y0: number; x1: number; y1: number } | null {
+function pathBounds(
+  path: number[],
+  matrix: PdfMatrix = IDENTITY_MATRIX,
+): { x0: number; y0: number; x1: number; y1: number } | null {
   const points: Array<[number, number]> = [];
+  const push = (x: number, y: number) => points.push(applyMatrix(matrix, x, y));
   for (let index = 0; index < path.length;) {
     const command = path[index];
     index += 1;
     if (command === 0 || command === 1) {
-      points.push([path[index], path[index + 1]]);
+      push(path[index], path[index + 1]);
       index += 2;
     } else if (command === 2) {
       for (let controls = 0; controls < 3; controls += 1) {
@@ -831,13 +891,16 @@ const BORDER_SIZES = [2, 4, 6, 8, 12, 18, 24];
  * `tableFormat`, so rule weights carry into `w:sz` and a shaded header band
  * becomes `headerFill`. One shape is kept because a template repeats it.
  */
-function inferTableFormat(rules: PdfRule[], fills: PdfFilledRect[]): TableFormat | undefined {
+function inferTableFormat(
+  rules: PdfRule[],
+  fills: PdfFilledRect[],
+): { format?: TableFormat; candidates: number } {
   // The 篇眉 rule under a running head is horizontal and wide, but it is not a
   // table rule: left in, it merged with a three-line table as a fourth row.
   const contentRules = rules.filter(rule => !inHeaderFooterBand(rule));
   const horizontals = contentRules.filter(rule => rule.orientation === 'horizontal');
   const verticals = contentRules.filter(rule => rule.orientation === 'vertical');
-  if (horizontals.length < 2) return undefined;
+  if (horizontals.length < 2) return { candidates: 0 };
 
   const rows = mergeRuleRows(horizontals);
   // A border can be drawn per cell, and Word also emits hairline rules the eye
@@ -849,16 +912,18 @@ function inferTableFormat(rules: PdfRule[], fills: PdfFilledRect[]): TableFormat
   const groups = groupRuleRows(significant);
 
   let best: { rows: PdfRule[]; x0: number; x1: number; score: number } | undefined;
+  let candidates = 0;
   for (const group of groups) {
     if (group.length < 2) continue;
     const x0 = Math.min(...group.map(rule => rule.start));
     const x1 = Math.max(...group.map(rule => rule.end));
     const width = x1 - x0;
     if (width < 80) continue;
+    candidates += 1;
     const score = width * (Math.abs(group[0].position - group[group.length - 1].position) + 20);
     if (!best || score > best.score) best = { rows: group, x0, x1, score };
   }
-  if (!best) return undefined;
+  if (!best) return { candidates };
 
   const ordered = [...best.rows].sort((a, b) => b.position - a.position);
   const top = ordered[0];
@@ -878,6 +943,9 @@ function inferTableFormat(rules: PdfRule[], fills: PdfFilledRect[]): TableFormat
   const format: TableFormat = { borders };
   const headerRule = ordered.length >= 2 ? ordered[1] : undefined;
   if (headerRule) {
+    // A three-line table draws its middle rule thinner than its outer rules; the
+    // renderer needs it as its own border, not as the grid's.
+    format.headerBorder = ruleBorder(headerRule);
     const fill = fills.find(rect =>
       rect.x0 <= best.x0 + 6 && rect.x1 >= best.x1 - 6
       && rect.y0 <= headerRule.position + 3 && rect.y1 >= top.position - 3
@@ -885,7 +953,7 @@ function inferTableFormat(rules: PdfRule[], fills: PdfFilledRect[]): TableFormat
     );
     if (fill) format.headerFill = normalizeColor(fill.color);
   }
-  return format;
+  return { format, candidates };
 }
 
 /** Collapse rules that share a row position — a stroke and a fill, say. */

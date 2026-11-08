@@ -169,6 +169,29 @@ function validateFootnotes(value: unknown, path: string, report: Report): void {
         validateRunList(entry.runs, `${entryPath}.runs`, report);
       }
     }
+    if (entry.paragraphs !== undefined) {
+      if (!Array.isArray(entry.paragraphs)) {
+        report(`${entryPath}.paragraphs`, `must be an array of paragraphs, received ${describe(entry.paragraphs)}`);
+        return;
+      }
+      entry.paragraphs.forEach((paragraph, paragraphIndex) => {
+        const paragraphPath = `${entryPath}.paragraphs[${paragraphIndex}]`;
+        if (!isObject(paragraph)) {
+          report(paragraphPath, `expected a paragraph object, received ${describe(paragraph)}`);
+          return;
+        }
+        if (typeof paragraph.text !== 'string') {
+          report(`${paragraphPath}.text`, `must be a string, received ${describe(paragraph.text)}`);
+        }
+        if (paragraph.runs !== undefined) {
+          if (!Array.isArray(paragraph.runs)) {
+            report(`${paragraphPath}.runs`, `must be an array of runs, received ${describe(paragraph.runs)}`);
+          } else {
+            validateRunList(paragraph.runs, `${paragraphPath}.runs`, report);
+          }
+        }
+      });
+    }
   });
 }
 

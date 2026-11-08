@@ -77,6 +77,14 @@ export interface TableFormat {
   headerSize?: number;
   /** A header cell's `w:rPr/w:b` — bold. */
   headerBold?: boolean;
+  /**
+   * The rule under the header row, when the template draws one separately.
+   *
+   * A three-line table's middle rule is thinner than its top and bottom rules
+   * (0.75 pt against 1.5 pt in the university template); the renderer otherwise
+   * had to reuse the grid border for it.
+   */
+  headerBorder?: BorderSpec;
 }
 
 /**
@@ -602,12 +610,24 @@ export type ContentBlock =
  * reference, carried by `InlineRun.footnoteRef`. The renderer turns both into a
  * real Word footnote rather than leaving the marker as body text.
  */
+export interface FootnoteParagraph {
+  /** The flattened text of one paragraph of a footnote. */
+  text: string;
+  /** Inline formatting spans, when the paragraph carried any. */
+  runs?: InlineRun[];
+}
+
 export interface FootnoteDefinition {
   id: string;
   /** The flattened text, as every text-only consumer reads it. */
   text: string;
   /** Inline formatting spans, when the definition carried any. */
   runs?: InlineRun[];
+  /**
+   * Every paragraph of the definition, when it ran over a blank line.
+   * `text`/`runs` mirror the first paragraph for consumers that read only them.
+   */
+  paragraphs?: FootnoteParagraph[];
 }
 
 export interface ThesisDocument {

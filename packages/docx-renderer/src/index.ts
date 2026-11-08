@@ -31,6 +31,7 @@ import type {
   DocumentTemplate,
   DocumentType,
   FootnoteDefinition,
+  FootnoteParagraph,
   ThesisDocument,
   ThesisSection,
   JournalArticle,
@@ -1088,6 +1089,8 @@ function renderTable(
       : fallback;
   const BO = toBorder(declared?.top, { style: BorderStyle.SINGLE, size: 12, color: '000000' });
   const BI = toBorder(declared?.insideH, { style: BorderStyle.SINGLE, size: 6, color: '000000' });
+  // A three-line table's middle rule is its own border, not the grid's.
+  const BHeader = toBorder(template.tableFormat?.headerBorder, BI);
   const BLeft = toBorder(declared?.left, { style: BorderStyle.SINGLE, size: 2, color: 'FFFFFF' });
   const BRight = toBorder(declared?.right, { style: BorderStyle.SINGLE, size: 2, color: 'FFFFFF' });
   const BBottom = toBorder(declared?.bottom, BO);
@@ -1148,7 +1151,7 @@ function renderTable(
         // notches in the header rule. The table-level borders supply verticals.
         borders: {
           top: BO,
-          bottom: templateDrawsGrid ? BBottom : BI,
+          bottom: templateDrawsGrid ? BBottom : BHeader,
         },
         shading: showShading
           ? {
@@ -3845,7 +3848,7 @@ function resetBookmarks(): void {
  * rendering the body; the definitions are collected up front from the document.
  */
 let footnoteNumbers = new Map<string, number>();
-let footnoteDefinitions = new Map<string, { text: string; runs?: InlineRun[] }>();
+let footnoteDefinitions = new Map<string, { text: string; runs?: InlineRun[]; paragraphs?: FootnoteParagraph[] }>();
 
 function resetFootnotes(): void {
   footnoteNumbers = new Map();
@@ -3856,7 +3859,11 @@ function registerFootnotes(doc: OpenThesisDocument | LegacyDocumentJSON): void {
   const definitions = (doc as { footnotes?: FootnoteDefinition[] }).footnotes;
   if (!definitions) return;
   for (const definition of definitions) {
-    footnoteDefinitions.set(definition.id, { text: definition.text, runs: definition.runs });
+    footnoteDefinitions.set(definition.id, {
+      text: definition.text,
+      runs: definition.runs,
+      paragraphs: definition.paragraphs,
+    });
   }
 }
 
@@ -3877,12 +3884,23 @@ function footnoteConfig(
   const config: { [id: number]: { children: Paragraph[] } } = {};
   for (const [id, number] of footnoteNumbers) {
     const definition = footnoteDefinitions.get(id);
-    const children = definition?.runs
-      ? inlineRunChildren(definition.runs, style)
-      : styledRuns(definition?.text ?? '', style);
-    config[number] = {
-      children: [new Paragraph({ children, spacing: { after: 0 } })],
-    };
+    // A definition that ran over a blank line has several paragraphs; each one
+    // becomes a paragraph in the footnote part.
+    const paragraphs = definition?.paragraphs;
+    const children = paragraphs && paragraphs.length > 0
+      ? paragraphs.map(paragraph => new Paragraph({
+          children: paragraph.runs
+            ? inlineRunChildren(paragraph.runs, style)
+            : styledRuns(paragraph.text, style),
+          spacing: { after: 0 },
+        }))
+      : [new Paragraph({
+          children: definition?.runs
+            ? inlineRunChildren(definition.runs, style)
+            : styledRuns(definition?.text ?? '', style),
+          spacing: { after: 0 },
+        })];
+    config[number] = { children };
   }
   return config;
 }

@@ -626,7 +626,19 @@ function isScannedPdf(error: unknown): boolean {
   return /run OCR first/i.test(errorMessage(error));
 }
 
-const OCR_HINT = 'Install OCRmyPDF (pip install ocrmypdf) or Tesseract, or run OCR on the file first and retry.';
+const OCR_HINT = 'Install OCRmyPDF (pip install ocrmypdf), or set OPENTHESIS_OCR_COMMAND to an OCR CLI that accepts "--skip-text --output-type pdf <input> <output>".';
+
+/**
+ * The OCR program to run.
+ *
+ * OCRmyPDF is the default, and `OPENTHESIS_OCR_COMMAND` points at any command
+ * that writes a text-layer PDF with the same arguments — so the CLI is not tied
+ * to one installer and a bundled tesseract.js is not required for scanned input.
+ */
+function ocrCommand(): string {
+  const override = process.env.OPENTHESIS_OCR_COMMAND?.trim();
+  return override || 'ocrmypdf';
+}
 
 type PdfTemplateMeta = NonNullable<Parameters<typeof parsePdfTemplate>[1]>;
 
@@ -643,7 +655,7 @@ async function parsePdfViaOcr(filePath: string, metadata: PdfTemplateMeta): Prom
   if (!hasOcrTool()) {
     throw new Error(`No text layer was found (the PDF looks scanned). ${OCR_HINT}`);
   }
-  console.log('   No text layer found; running local OCR with ocrmypdf...');
+  console.log(`   No text layer found; running local OCR with ${ocrCommand()}...`);
   const workDir = mkdtempSync(join(tmpdir(), 'openthesis-ocr-'));
   const ocrPath = join(workDir, 'ocr.pdf');
   try {
@@ -662,13 +674,14 @@ function hasOcrTool(): boolean {
   return runOcrCommand(['--version']).status === 0;
 }
 
-/** Run `ocrmypdf`, resolving it through the shell on Windows (`.cmd`). */
+/** Run the OCR command, resolving it through the shell on Windows (`.cmd`). */
 function runOcrCommand(ocrArgs: string[]): ReturnType<typeof spawnSync> {
+  const command = ocrCommand();
   if (process.platform === 'win32') {
-    const line = ['ocrmypdf', ...ocrArgs].map(quoteShellArg).join(' ');
+    const line = [command, ...ocrArgs].map(quoteShellArg).join(' ');
     return spawnSync(line, { shell: true, encoding: 'utf-8' });
   }
-  return spawnSync('ocrmypdf', ocrArgs, { encoding: 'utf-8' });
+  return spawnSync(command, ocrArgs, { encoding: 'utf-8' });
 }
 
 function quoteShellArg(value: string): string {

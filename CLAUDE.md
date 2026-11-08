@@ -76,8 +76,8 @@ thesis build <manuscript.md> --type thesis -t <template.json> -o output.docx
 | Template parsing | Works best with real Word templates | Current: works for most templates |
 | Markdown inline styling | Bold, italic, strikethrough, inline code, links, nested emphasis and table-cell formatting all survive as runs | — |
 | Markdown dialect | Predictable manuscript subset | Expand only with compatibility tests |
-| Markdown footnotes | `[^1]` definitions become Word footnotes; a definition is one paragraph | Multi-paragraph footnotes |
-| Scanned PDFs | `parse` runs a locally installed OCRmyPDF, and says what to install when it is missing | Bundled OCR (tesseract.js) is not shipped |
+| Markdown footnotes | `[^1]` definitions become Word footnotes, including multi-paragraph definitions | Footnote markers inside a table cell |
+| Scanned PDFs | `parse` runs a locally installed OCRmyPDF, or `OPENTHESIS_OCR_COMMAND`; says what to install when neither is present | Bundled OCR (tesseract.js) is not shipped |
 | Multi-section templates | The cover, front matter and body each get their own section; a template that changes its setup mid-chapter (landscape, a two-column passage) is still flattened into the part it falls in | Map a part to a page setup the content can name |
 | Document grid | The template snaps text to a 312-twip `w:docGrid`; the writer library emits its own `linePitch="360"` | Write `w:docGrid` in the post-pass |
 | Unsupported LaTeX | The Unicode fallback is lossy; `convertLatexToOmml` reports it, but the AST path has no diagnostic channel | Surface unsupported syntax on the rendered document |

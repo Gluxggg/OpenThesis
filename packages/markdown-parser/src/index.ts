@@ -2,6 +2,7 @@ import type {
   ContentBlock,
   DocumentType,
   FootnoteDefinition,
+  FootnoteParagraph,
   InlineRun,
   JournalArticle,
   JournalAuthor,
@@ -66,7 +67,7 @@ export function parseMarkdownWithMetadata(
   const { body, frontMatter: parsedFrontMatter } = extractFrontMatter(markdown);
   const frontMatter = { ...parsedFrontMatter, ...options.metadata };
   const documentType = resolveDocumentType(options.documentType, frontMatter.type);
-  const footnotes = new Map<string, string>();
+  const footnotes = new Map<string, string[]>();
   const items = tokenize(body, footnotes);
   const firstHeadingIndex = items.findIndex(item => item.kind === 'heading' && item.level === 1);
   const headingTitle = firstHeadingIndex >= 0
@@ -86,9 +87,15 @@ export function parseMarkdownWithMetadata(
       : createThesisDocument(title, items, frontMatter);
 
   if (footnotes.size > 0) {
-    document.footnotes = [...footnotes.entries()].map(([id, source]) => {
-      const inline = parseInline(source);
-      return { id, text: inline.text, ...(inline.runs ? { runs: inline.runs } : {}) } as FootnoteDefinition;
+    document.footnotes = [...footnotes.entries()].map(([id, lines]) => {
+      const paragraphs = footnoteParagraphs(lines);
+      const first = paragraphs[0] ?? { text: '' };
+      return {
+        id,
+        text: first.text,
+        ...(first.runs ? { runs: first.runs } : {}),
+        ...(paragraphs.length > 1 ? { paragraphs } : {}),
+      } as FootnoteDefinition;
     });
   }
 
@@ -201,7 +208,7 @@ function parseFrontMatterValue(value: string): FrontMatterValue {
   return unquoted;
 }
 
-function tokenize(markdown: string, footnotes?: Map<string, string>): MarkdownItem[] {
+function tokenize(markdown: string, footnotes?: Map<string, string[]>): MarkdownItem[] {
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
   const items: MarkdownItem[] = [];
   let index = 0;
@@ -216,10 +223,29 @@ function tokenize(markdown: string, footnotes?: Map<string, string>): MarkdownIt
 
     // `[^1]: text` defines a footnote. It is content, not the paragraph it
     // looks like, and it has to leave the body before anything else reads it.
+    // Indented lines continue the definition, and a blank line inside it starts
+    // a second footnote paragraph (as CommonMark footnote definitions allow).
     const definition = /^\[\^([^\]]+)\]:\s*(.*)$/.exec(trimmed);
     if (definition) {
-      footnotes?.set(definition[1].trim(), definition[2].trim());
-      index += 1;
+      const id = definition[1].trim();
+      const body = [definition[2].trim()];
+      let next = index + 1;
+      while (next < lines.length) {
+        const candidate = lines[next];
+        if (!candidate.trim()) {
+          if (lines[next + 1] !== undefined && /^(?: {2,}|\t)/.test(lines[next + 1])) {
+            body.push('');
+            next += 1;
+            continue;
+          }
+          break;
+        }
+        if (!/^(?: {2,}|\t)/.test(candidate)) break;
+        body.push(candidate.replace(/^(?: {2,}|\t)+/, '').trimEnd());
+        next += 1;
+      }
+      footnotes?.set(id, body);
+      index = next;
       continue;
     }
 
@@ -977,6 +1003,29 @@ function parseInline(source: string): { text: string; runs?: InlineRun[] } {
       .map(run => ({ ...run, text: cleanInline(run.text) }))
       .filter(run => run.text.length > 0 || run.footnoteRef),
   };
+}
+
+/**
+ * Turn a footnote definition's lines into paragraphs.
+ *
+ * A blank line starts a new footnote paragraph; the lines of one paragraph are
+ * joined the way body lines are, so two CJK lines do not gain a space.
+ */
+function footnoteParagraphs(lines: string[]): FootnoteParagraph[] {
+  const groups: string[][] = [[]];
+  for (const line of lines) {
+    if (!line.trim()) {
+      if (groups[groups.length - 1].length > 0) groups.push([]);
+      continue;
+    }
+    groups[groups.length - 1].push(line.trim());
+  }
+  return groups
+    .filter(group => group.length > 0)
+    .map(group => {
+      const inline = parseInline(joinSoftLines(group));
+      return { text: inline.text, ...(inline.runs ? { runs: inline.runs } : {}) };
+    });
 }
 
 function matchDelimiter(segment: string, index: number): InlineDelimiter | null {

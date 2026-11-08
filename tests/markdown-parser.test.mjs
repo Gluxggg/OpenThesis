@@ -258,6 +258,24 @@ test('a footnote definition leaves the body and a reference keeps its id', () =>
   assert.ok(paragraph?.runs?.some(run => run.footnoteRef === '1'));
 });
 
+test('reads a footnote definition that runs over a blank line', () => {
+  const document = parseMarkdown([
+    '---',
+    'title: Multi-paragraph footnote',
+    '---',
+    '',
+    '正文[^1]。',
+    '',
+    '[^1]: 第一段。',
+    '',
+    '    第二段。',
+  ].join('\n'));
+
+  const definition = document.footnotes?.[0];
+  assert.equal(definition?.text, '第一段。');
+  assert.deepEqual(definition?.paragraphs?.map(entry => entry.text), ['第一段。', '第二段。']);
+});
+
 test('reads a front-matter block sequence', () => {
   const document = parseMarkdown(`---
 title: T

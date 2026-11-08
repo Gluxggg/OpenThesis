@@ -1322,4 +1322,52 @@ definition is written into the `footnotes` part of the package, which Word
 numbers itself. `InlineRun.footnoteRef` carries the reference; the validator
 allows a reference run to have no text of its own.
 
+A definition that runs over a blank line — a second footnote paragraph — is read
+too: indented lines continue it, and a blank line inside it starts another
+paragraph in the footnote part.
+
+`pnpm check`: 244 tests, all passing.
+
+---
+
+## 31. The boundaries this round closed
+
+The four limitations reported after the last round, and what each needed.
+
+### The page transform, and the header rule
+
+Rules were read in path coordinates, so a page that scales or shifts its content
+with `cm` had its table drawn somewhere else than the rules were recorded. The
+current transform is tracked through `q`/`Q`/`cm` and applied to every segment
+and rectangle before it becomes a rule; a test draws its rules inside a `cm` that
+moves them out of the footer band and back into the text column.
+
+A three-line table's middle rule is thinner than its outer rules (0.75 pt against
+1.5 pt in the university template). It was being read and then dropped, because
+`TableFormat` had only the grid's `insideH`. It has its own field now —
+`headerBorder` — and the renderer uses it for the header row's bottom border, so a
+document built from the USTB PDF gets `w:sz="12"` on top and bottom and
+`w:sz="6"` under the header.
+
+A PDF that draws several different tables can still only contribute one shape;
+the parser now warns when more than one candidate was found and says the largest
+was kept. Merged cells are not expressible in the content model either — the
+table block is rectangular — so they stay out.
+
+### Multi-paragraph footnotes
+
+Indented continuation lines are part of a definition, and a blank line inside it
+starts a second paragraph; both reach the `footnotes` part as separate
+paragraphs.
+
+### The OCR program is configurable
+
+`OPENTHESIS_OCR_COMMAND` names the program `parse` runs on a scanned PDF, with
+the same `--skip-text --output-type pdf <in> <out>` contract as OCRmyPDF. The
+built-in tesseract.js path stays unshipped: it would add a WASM engine and
+language models to a CLI that currently installs in seconds, and the environment
+variable makes any local OCR — including tesseract — reachable today.
+
+`pnpm check`: 250 tests, all passing.
+
 `pnpm check`: 244 tests, all passing.

@@ -199,6 +199,32 @@ test('renders formatted runs inside table cells', async () => {
   assert.match(xml, /斜体单元格/);
 });
 
+test('uses the template’s own header rule for the header row', async () => {
+  // A three-line table's middle rule is thinner than its outer rules; the
+  // template records it as `headerBorder` and the header cell must use it.
+  const custom = structuredClone(template);
+  custom.tableFormat = {
+    ...(custom.tableFormat ?? {}),
+    headerBorder: { style: 'single', size: 8, color: 'FF0000' },
+  };
+  const buffer = await renderDocument({
+    outputPath: '',
+    template: custom,
+    document: {
+      type: 'thesis', meta: { title: 'Header rule' }, cover: [],
+      sections: [{
+        id: 'rule', type: 'chapter', title: 'Rule',
+        content: [{
+          type: 'table', caption: '表1 规则',
+          headers: ['A', 'B'], data: [['1', '2']],
+        }],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /w:color="FF0000"\s+w:sz="8"/);
+});
+
 test('renders a Markdown footnote as a real Word footnote', async () => {
   // `[^1]` used to stay body text. The reference becomes a footnote marker and
   // the definition moves into `word/footnotes.xml`, which Word numbers itself.
@@ -226,6 +252,33 @@ test('renders a Markdown footnote as a real Word footnote', async () => {
   assert.match(xml, /w:footnoteReference/);
   const footnotes = await zip.file('word/footnotes.xml').async('string');
   assert.match(footnotes, /这是脚注内容/);
+});
+
+test('writes every paragraph of a multi-paragraph footnote', async () => {
+  const buffer = await renderDocument({
+    outputPath: '',
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Multi footnote' }, cover: [],
+      footnotes: [{
+        id: '1',
+        text: '第一段。',
+        paragraphs: [{ text: '第一段。' }, { text: '第二段。' }],
+      }],
+      sections: [{
+        id: 'note', type: 'chapter', title: 'Note',
+        content: [{
+          type: 'paragraph',
+          text: '正文[^1]。',
+          runs: [{ text: '正文' }, { text: '', footnoteRef: '1' }, { text: '。' }],
+        }],
+      }],
+    },
+  });
+  const { zip } = await documentXml(buffer);
+  const footnotes = await zip.file('word/footnotes.xml').async('string');
+  assert.match(footnotes, /第一段/);
+  assert.match(footnotes, /第二段/);
 });
 
 test('rejects tables without header columns', async () => {
