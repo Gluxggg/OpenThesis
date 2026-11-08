@@ -62,7 +62,7 @@ node packages/cli/dist/index.js parse format-guide.pdf \
 # → format-guide.template.json
 ```
 
-PDF stores positioned glyphs instead of named Word styles. OpenThesis therefore groups text into lines, clusters typography, identifies the dominant body style, and heuristically maps larger or centered styles to headings and titles. The generated JSON includes warnings because PDF inference cannot recover information that is not encoded in the file.
+PDF stores positioned glyphs instead of named Word styles. OpenThesis groups text into lines, reads each font's PostScript name off the page's font objects (`SimSun`, `SimHei`, `TimesNewRomanPS-BoldMT`) and maps it to the family the writing guide names — 宋体, 黑体, 楷体, 仿宋 — keeping the bold and italic the face itself declares. It measures the text column rather than the running head or a paragraph's first-line indent, and treats a numbered line as a heading only when it is set larger than the body, so a table of contents does not turn into a chapter. The generated JSON still carries warnings, because inference cannot recover information the file does not encode.
 
 Review the generated template before production use. Exact table borders, drawing objects, headers/footers, footnotes, and scanned pages remain outside this first PDF slice; advanced reconstruction and built-in OCR remain planned for V4.
 
@@ -146,7 +146,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 ## Features
 
 - ✅ **Style inheritance resolution** — DOCX `basedOn` chains are recursively resolved
-- ✅ **Text-based PDF templates** — Typography and page geometry are inferred into the same reusable style DSL (heuristic; see the PDF scope note above)
+- ✅ **Text-based PDF templates** — Font faces, weights and the text column are inferred into the same reusable style DSL, not just sizes (heuristic; see the PDF scope note above)
 - ✅ **Template-silent vs. explicit formatting** — A style declares only what the template actually specifies; the renderer fills the rest from domain defaults (学位论文 vs. GB/T 9704 公文), so a formatting-free template still produces correct headings
 - ✅ **Semantic role detection** — Heuristically maps style names → block types (e.g. "标题 1" → heading1), restricted to paragraph styles and anchored so `Table Grid` is not mistaken for a heading
 - ✅ **Page geometry extraction** — Margins, page size, columns from every section, including paragraph-level section breaks

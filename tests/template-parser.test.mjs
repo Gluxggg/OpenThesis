@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parsePdfTemplate, parseTemplate } from '../packages/template-parser/dist/index.js';
-import { buildTestPdf } from './helpers/pdf.mjs';
+import { buildLinedPdf, buildTestPdf } from './helpers/pdf.mjs';
 
 async function createTemplate() {
   const zip = new JSZip();
@@ -508,6 +508,108 @@ test('infers a reusable template from a text-based PDF', async () => {
 
 test('asks for OCR when a PDF has no extractable text', async () => {
   await assert.rejects(() => parsePdfTemplate(buildTestPdf({ text: false })), /run OCR first/);
+});
+
+test('maps the CJK face a PDF embeds onto the family Word names', async () => {
+  // PDF.js reports `sans-serif` as the CSS family of an embedded font and keeps
+  // `SimSun` on the font object. Reading the CSS family alone turned every
+  // Chinese face in the inferred template into Arial — 宋体 body text became
+  // "Arial", and the rendered document fell back to whatever Word substitutes.
+  // The fixture is a subsetted 宋体/黑体 PDF (37 KB), so the names stay real.
+  const template = await parsePdfTemplate(
+    readFileSync(new URL('./fixtures/pdfs/cjk-template.pdf', import.meta.url)),
+    { documentType: 'thesis', organization: 'Test University' },
+  );
+
+  const styles = Object.values(template.styles);
+  const body = styles.find(style => style.font?.size === 24);
+  const heading = styles.find(style => style.font?.size === 30);
+  assert.equal(body?.font?.eastAsia, '宋体');
+  assert.equal(body?.font?.name, 'Times New Roman');
+  assert.equal(heading?.font?.eastAsia, '黑体');
+  assert.equal(template.styleRoles['pdf_style_01'], 'heading1');
+  assert.equal(template.styleRoles['pdf_style_02'], 'paragraph');
+});
+
+test('reads a bold face from the PDF font objects, not the CSS fallback', async () => {
+  // The fallback family is the same `sans-serif` for every face, so bold used
+  // to be undetectable on a PDF-derived template. The base-14 font object is
+  // named `Helvetica-Bold`, which is where the weight is read from.
+  const template = await parsePdfTemplate(buildLinedPdf({
+    pages: [[
+      { text: 'A Bold Heading', x: 72, y: 700, size: 15, font: 'bold' },
+      { text: 'The body text carries the bulk of the sampled characters.', x: 72, y: 660, size: 12 },
+      { text: 'so the dominant cluster is the paragraph style.', x: 72, y: 640, size: 12 },
+      { text: 'A third line makes the body cluster large enough to win.', x: 72, y: 620, size: 12 },
+      { text: 'A fourth line keeps the inferred margins stable.', x: 72, y: 600, size: 12 },
+    ]],
+  }), { documentType: 'thesis' });
+
+  const styles = Object.values(template.styles);
+  const heading = styles.find(style => style.font?.size === 30);
+  const body = styles.find(style => style.font?.size === 24);
+  assert.equal(heading?.font?.bold, true);
+  assert.equal(heading?.font?.name, 'Arial');
+  assert.equal(body?.font?.bold, undefined);
+});
+
+test('measures the left margin from the text column, not from an indented first line', async () => {
+  // The old 20th-percentile left edge landed on the indent whenever the sampled
+  // paragraphs were short: a 2-character indent became part of the left margin.
+  // The leftmost line is the column, and the indent is the distance from it.
+  const template = await parsePdfTemplate(buildLinedPdf({
+    pages: [[
+      { text: 'A paragraph opens with a two-character first-line indent.', x: 96, y: 700, size: 12 },
+      { text: 'Its continuation line returns to the text column.', x: 72, y: 680, size: 12 },
+      { text: 'Another paragraph opens with the same first-line indent.', x: 96, y: 660, size: 12 },
+      { text: 'A third paragraph opens the same way.', x: 96, y: 640, size: 12 },
+      { text: 'A fourth paragraph opens the same way.', x: 96, y: 620, size: 12 },
+      { text: 'A fifth paragraph opens the same way.', x: 96, y: 600, size: 12 },
+    ]],
+  }), { documentType: 'thesis' });
+
+  assert.equal(template.page.margins.left, 1440);
+  const body = Object.values(template.styles).find(style => style.font?.size === 24);
+  assert.equal(body?.paragraph?.firstLineIndent, 480);
+});
+
+test('a running head does not set the top margin', async () => {
+  // The header sits in the top band and used to be the topmost line of the
+  // page, so the inferred top margin measured the header: 1.5 cm for a page
+  // whose text column starts at 2.5 cm. Only the text column counts now.
+  const template = await parsePdfTemplate(buildLinedPdf({
+    pages: [[
+      { text: 'University of Somewhere Thesis', x: 200, y: 780, size: 9 },
+      { text: 'The body starts at the top margin of the page.', x: 72, y: 700, size: 12 },
+      { text: 'A second line continues the body text.', x: 72, y: 680, size: 12 },
+      { text: 'A third line carries more characters than the header.', x: 72, y: 660, size: 12 },
+      { text: 'A fourth line keeps the body cluster dominant.', x: 72, y: 640, size: 12 },
+    ]],
+  }), { documentType: 'thesis' });
+
+  assert.equal(template.page.margins.top, 1600);
+});
+
+test('a table-of-contents line is not read as a heading', async () => {
+  // A TOC entry is "1 Introduction ........ 3": it opens like a numbered
+  // heading but is set in the body size. The old rule matched the number and
+  // promoted a 10.5 pt TOC entry to heading1.
+  const template = await parsePdfTemplate(buildLinedPdf({
+    pages: [[
+      { text: '1 Introduction ........ 3', x: 72, y: 700, size: 10.5 },
+      { text: '2 Method', x: 72, y: 660, size: 15, font: 'bold' },
+      { text: 'The body text carries the bulk of the sampled characters.', x: 72, y: 620, size: 12 },
+      { text: 'so the dominant cluster is the paragraph style.', x: 72, y: 600, size: 12 },
+      { text: 'A third line makes the body cluster large enough to win.', x: 72, y: 580, size: 12 },
+      { text: 'A fourth line keeps the inferred margins stable.', x: 72, y: 560, size: 12 },
+    ]],
+  }), { documentType: 'thesis' });
+
+  const styles = Object.entries(template.styles);
+  const toc = styles.find(([, style]) => style.font?.size === 21);
+  const heading = styles.find(([, style]) => style.font?.size === 30);
+  assert.equal(toc && template.styleRoles[toc[0]], 'paragraph_no_indent');
+  assert.equal(heading && template.styleRoles[heading[0]], 'heading1');
 });
 
 test('carries w:keepNext and w:keepLines through to the style', async () => {

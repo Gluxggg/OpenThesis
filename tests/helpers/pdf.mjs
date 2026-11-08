@@ -26,3 +26,69 @@ export function buildTestPdf({ text = true } = {}) {
   pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return Buffer.from(pdf);
 }
+
+/**
+ * A PDF laid out line by line, so a test can put text exactly where the
+ * inference should measure it — an indented first line, a running head in the
+ * header band, a table-of-contents line with dot leaders.
+ *
+ * `font` picks one of the base-14 faces. They are the faces PDF.js reports by
+ * their PostScript names (`Helvetica-Bold`), which is what the parser reads to
+ * recover bold and italic; an embedded font reports `sans-serif` instead.
+ */
+export function buildLinedPdf({ pages = [[]], width = 612, height = 792 } = {}) {
+  const baseFonts = {
+    regular: ['F1', 'Helvetica'],
+    bold: ['F2', 'Helvetica-Bold'],
+    serif: ['F3', 'Times-Roman'],
+    italic: ['F4', 'Helvetica-Oblique'],
+  };
+  const fontKeys = Object.keys(baseFonts);
+  const pageCount = pages.length || 1;
+  const pageNumbers = [];
+  const contentNumbers = [];
+  for (let index = 0; index < pageCount; index += 1) {
+    pageNumbers.push(3 + index * 2);
+    contentNumbers.push(4 + index * 2);
+  }
+  const firstFont = 3 + pageCount * 2;
+  const fontNumbers = {};
+  fontKeys.forEach((key, index) => { fontNumbers[key] = firstFont + index; });
+
+  const objects = [];
+  objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objects[2] = `<< /Type /Pages /Kids [${pageNumbers.map(number => `${number} 0 R`).join(' ')}] /Count ${pageCount} >>`;
+
+  const fontResources = fontKeys
+    .map(key => `/${baseFonts[key][0]} ${fontNumbers[key]} 0 R`)
+    .join(' ');
+  pages.forEach((lines, index) => {
+    const stream = lines.map(line => {
+      const [id] = baseFonts[line.font || 'regular'] || baseFonts.regular;
+      return `BT /${id} ${line.size ?? 12} Tf 1 0 0 1 ${line.x ?? 72} ${line.y ?? 700} Tm (${escapePdfText(line.text)}) Tj ET`;
+    }).join('\n');
+    objects[pageNumbers[index]] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /Font << ${fontResources} >> >> /Contents ${contentNumbers[index]} 0 R >>`;
+    objects[contentNumbers[index]] = `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`;
+  });
+
+  fontKeys.forEach((key, index) => {
+    objects[fontNumbers[key]] = `<< /Type /Font /Subtype /Type1 /BaseFont /${baseFonts[key][1]} >>`;
+  });
+
+  const total = objects.length - 1;
+  let pdf = '%PDF-1.4\n';
+  const offsets = [];
+  for (let number = 1; number <= total; number += 1) {
+    offsets[number] = Buffer.byteLength(pdf);
+    pdf += `${number} 0 obj\n${objects[number]}\nendobj\n`;
+  }
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${total + 1}\n0000000000 65535 f \n`;
+  pdf += offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  pdf += `trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf);
+}
+
+function escapePdfText(text) {
+  return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+}

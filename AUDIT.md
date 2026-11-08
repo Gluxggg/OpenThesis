@@ -1151,3 +1151,66 @@ full page. Scaled down proportionally into one column of a two-column page, a
 The template's proportions describe a different page, so they say nothing here.
 
 `pnpm check`: 223 tests, all passing.
+
+---
+
+## 26. What the PDF inference was actually measuring
+
+The PDF slice had a test and a CLI path, so it "worked". Reading the inferred
+template back against the document it came from showed what it was reading.
+
+### Every Chinese face came back as Arial
+
+PDF.js reports the CSS family of an embedded font as `sans-serif` (or
+`monospace` for 黑体) and keeps the PostScript name — `SimSun` — on the font
+object it loads for the operator list. The parser only read the CSS family, so
+every CJK style in a PDF-derived template said `eastAsia: "Arial"` (or
+`Courier New`), and the rendered document asked Word for a font the guide never
+names.
+
+| Inferred from the USTB thesis PDF | Before | After |
+|---|---|---|
+| Body | Arial 12pt | 宋体 12pt, Times New Roman |
+| Chapter heading | Courier New 15pt | 黑体 15pt |
+| Cover title | Arial 18pt | 宋体 18pt |
+| Bold | never detected | `TimesNewRomanPS-BoldMT` → bold 14pt |
+
+The font objects come from the page's operator list (`commonObjs` / `objs`),
+which is also where a face's weight and slant live, so `Helvetica-Bold` and
+`TimesNewRomanPS-BoldMT` now carry bold into the style. The same read on a real
+university template published as PDF (大连医科大学) raised the recognised roles
+from 11 styles of Arial/Courier New to 18 styles of 黑体 / 楷体 / 微软雅黑 /
+宋体.
+
+### Margins were measured from the wrong lines
+
+| Measurement | Before | After | The document's own `sectPr` |
+|---|---|---|---|
+| Top margin | 847 twips | 1708 | 1701 — the running head sat at 1.5 cm and was measured as margin |
+| Left edge | 2268 twips | 2182 | 1701 + 567 gutter = 2268 text column |
+| Right margin | 1718 twips | 1701 | 1701 |
+
+The header/footer band (small text in the top 10% or bottom 8%) is excluded
+now, and the top margin comes from the pages whose first element sits highest
+rather than from the median of headings that carry 段前 spacing.
+
+### A table of contents became heading1
+
+`1 绪论 ........ 3` matched the numbered-heading regex, so a 10.5 pt TOC entry
+was promoted to heading1 alongside a real 15 pt chapter heading. A numbered
+line is a heading only when it is larger than the body size now, and dot
+leaders are refused outright.
+
+### What stays heuristic
+
+Mirrored margins cannot be expressed as one left margin: the inferred value
+(2182) sits between the declared 1701 and the gutter's 2268. A bottom margin on
+a document whose pages never fill is extrapolated from the clamp, not measured.
+Synthetic bold — a Word run with `w:b` and no bold face — leaves no trace in the
+text layer.
+
+A 37 KB subsetted 宋体/黑体 fixture (`tests/fixtures/pdfs/cjk-template.pdf`)
+keeps the font mapping covered; four synthetic-PDF tests cover weights, the text
+column, the running head, and the TOC guard.
+
+`pnpm check`: 230 tests, all passing.

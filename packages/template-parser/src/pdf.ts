@@ -45,12 +45,67 @@ interface StyleCluster {
 const POINTS_TO_TWIPS = 20;
 const MAX_SAMPLED_PAGES = 50;
 
+/**
+ * CSS families PDF.js falls back to when a font carries no usable PostScript
+ * name. A PDF template never says "sans-serif"; it says Arial. These mappings
+ * turn the fallback back into a family Word knows.
+ */
+const GENERIC_FONT_FAMILIES: Record<string, string> = {
+  'sans-serif': 'Arial',
+  serif: 'Times New Roman',
+  monospace: 'Courier New',
+};
+
+/**
+ * The CJK faces a Chinese writing guide actually names. PDF.js reports the
+ * PostScript name (`BCDEEE+SimSun`), and Word wants `宋体`, so each alias maps
+ * to the family the template's own styles use.
+ */
+const CJK_FONT_FAMILIES: Array<[RegExp, string]> = [
+  [/simsun|songti|stsong|nsimsun|宋体/i, '宋体'],
+  [/simhei|heiti|sthei|黑体/i, '黑体'],
+  [/simkai|kaiti|stkaiti|楷体/i, '楷体'],
+  [/simfang|fangsong|stfangsong|仿宋/i, '仿宋'],
+  [/microsoft ?yahei|yahei|微软雅黑/i, '微软雅黑'],
+  [/dengxian|等线/i, '等线'],
+];
+
+/** The Latin half of the font pair, mapped from PostScript names to Word ones. */
+const LATIN_FONT_FAMILIES: Array<[RegExp, string]> = [
+  [/times/i, 'Times New Roman'],
+  [/arial|helvetica/i, 'Arial'],
+  [/courier/i, 'Courier New'],
+  [/cambria/i, 'Cambria'],
+  [/calibri/i, 'Calibri'],
+  [/georgia/i, 'Georgia'],
+  [/verdana/i, 'Verdana'],
+  [/palatino/i, 'Palatino Linotype'],
+];
+
+/**
+ * Where a running head or a page number sits, as a fraction of the page.
+ *
+ * These lines are printed outside the text column, so measuring the margins
+ * from every line on the page measured the header instead of the body: the
+ * inferred top margin came out at 1.5 cm for a template whose text starts at
+ * 2.5 cm.
+ */
+const HEADER_BAND = 0.9;
+const FOOTER_BAND = 0.08;
+
+/** The operator PDF.js uses for `setFont`, and the page type it is read from. */
+interface FontNameSource {
+  getOperatorList(): Promise<{ fnArray: number[]; argsArray: unknown[] }>;
+  commonObjs: { get(id: string): unknown };
+  objs: { get(id: string): unknown };
+}
+
 /** Infer a reusable OpenThesis style template from a text-based PDF. */
 export async function parsePdfTemplate(
   buffer: Buffer | ArrayBuffer,
   metaOverrides?: Partial<TemplateMeta>,
 ): Promise<DocumentTemplate> {
-  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const { getDocument, OPS } = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const data = buffer instanceof ArrayBuffer
     ? new Uint8Array(buffer.slice(0))
     : Uint8Array.from(buffer);
@@ -65,6 +120,10 @@ export async function parsePdfTemplate(
       const page = await pdf.getPage(pageNumber);
       const viewport = page.getViewport({ scale: 1 });
       pageSizes.push({ width: viewport.width, height: viewport.height });
+      // `content.styles` only carries a fallback CSS family ("sans-serif"),
+      // which used to become Arial for every Chinese font. The real name lives
+      // on the page's font objects, so it is read from there first.
+      const fontNames = await readFontNames(page as unknown as FontNameSource, OPS.setFont);
       const content = await page.getTextContent();
       const items = content.items
         .filter(item => 'str' in item && Boolean(item.str.trim()))
@@ -72,6 +131,7 @@ export async function parsePdfTemplate(
       lines.push(...groupItemsIntoLines(
         items,
         content.styles as Record<string, PdfTextStyle>,
+        fontNames,
         pageNumber,
         viewport.width,
         viewport.height,
@@ -132,9 +192,57 @@ export async function parsePdfTemplate(
   };
 }
 
+/**
+ * The real font name behind each text-content font id.
+ *
+ * PDF.js reports `sans-serif` / `serif` / `monospace` as the CSS family of an
+ * embedded font and keeps the PostScript name on the font object instead. This
+ * reads the operator list once per page, which is what loads those objects, and
+ * maps each id to `BCDEEE+SimSun` and friends. A page whose operators cannot be
+ * read still yields its text; the caller falls back to the CSS family then.
+ */
+async function readFontNames(
+  page: FontNameSource,
+  setFontOperator: number,
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  let operators: { fnArray: number[]; argsArray: unknown[] };
+  try {
+    operators = await page.getOperatorList();
+  } catch {
+    return names;
+  }
+
+  const ids = new Set<string>();
+  for (let index = 0; index < operators.fnArray.length; index += 1) {
+    if (operators.fnArray[index] !== setFontOperator) continue;
+    const args = operators.argsArray[index] as unknown[] | undefined;
+    const id = args?.[0];
+    if (typeof id === 'string' && id) ids.add(id);
+  }
+  for (const id of ids) {
+    const name = fontObjectName(page, id);
+    if (name) names.set(id, name);
+  }
+  return names;
+}
+
+function fontObjectName(page: FontNameSource, id: string): string {
+  for (const store of [page.commonObjs, page.objs]) {
+    try {
+      const font = store?.get(id) as { name?: unknown } | null | undefined;
+      if (font && typeof font.name === 'string' && font.name) return font.name;
+    } catch {
+      // The object belongs to the other store; try that one.
+    }
+  }
+  return '';
+}
+
 function groupItemsIntoLines(
   items: PdfTextItem[],
   styles: Record<string, PdfTextStyle>,
+  fontNames: Map<string, string>,
   page: number,
   pageWidth: number,
   pageHeight: number,
@@ -156,11 +264,14 @@ function groupItemsIntoLines(
     const dominantFont = [...weightedStyles.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
     const dominantItem = lineItems.find(item => item.fontName === dominantFont) ?? lineItems[0];
     const fontSize = inferFontSize(dominantItem);
-    const fontFamily = normalizeFontFamily(styles[dominantFont]?.fontFamily || dominantFont);
+    // The font object's name ("BCDEEE+SimSun") beats the CSS fallback
+    // ("sans-serif"), which would otherwise turn every Chinese face into Arial.
+    const resolvedFont = fontNames.get(dominantFont) || styles[dominantFont]?.fontFamily || dominantFont;
+    const fontFamily = normalizeFontFamily(resolvedFont);
     const text = joinTextItems(lineItems, fontSize);
     const x = Math.min(...lineItems.map(item => Number(item.transform[4] ?? 0)));
     const right = Math.max(...lineItems.map(item => Number(item.transform[4] ?? 0) + item.width));
-    const fontDescriptor = `${fontFamily} ${dominantFont}`;
+    const fontDescriptor = `${fontFamily} ${resolvedFont}`;
     return {
       page, pageWidth, pageHeight, text, x, y, right, fontFamily, fontSize,
       bold: /bold|black|heavy|semibold|demi/i.test(fontDescriptor),
@@ -188,10 +299,19 @@ function inferFontSize(item: PdfTextItem): number {
 
 function normalizeFontFamily(font: string): string {
   const cleaned = font.replace(/^['"]|['"]$/g, '').replace(/^[A-Z]{6}\+/, '').trim();
-  if (/^sans-serif$/i.test(cleaned)) return 'Arial';
-  if (/^serif$/i.test(cleaned)) return 'Times New Roman';
-  if (/^monospace$/i.test(cleaned)) return 'Courier New';
+  const generic = GENERIC_FONT_FAMILIES[cleaned.toLowerCase()];
+  if (generic) return generic;
   return cleaned && !/^g_d\d+_f\d+$/i.test(cleaned) ? cleaned : 'Times New Roman';
+}
+
+/** `SimSun` → `宋体`, so the template names the face the guide names. */
+function cjkFontFamily(family: string): string | undefined {
+  return CJK_FONT_FAMILIES.find(([pattern]) => pattern.test(family))?.[1];
+}
+
+/** `TimesNewRomanPS-BoldMT` → `Times New Roman`, a name Word resolves. */
+function latinFontFamily(family: string): string | undefined {
+  return LATIN_FONT_FAMILIES.find(([pattern]) => pattern.test(family))?.[1];
 }
 
 function buildStyleClusters(lines: PdfLine[]): StyleCluster[] {
@@ -237,11 +357,16 @@ function clusterToParagraphStyle(
   body: StyleCluster,
 ): ParagraphStyle {
   const hasCjk = cluster.lines.some(line => /[\u3400-\u9fff]/u.test(line.text));
+  const cjk = cjkFontFamily(cluster.fontFamily);
+  const latin = latinFontFamily(cluster.fontFamily);
   const lineSpacing = cluster.id === body.id ? inferLineSpacing(cluster.lines) : undefined;
   return {
     font: {
-      name: hasCjk ? 'Times New Roman' : cluster.fontFamily,
-      eastAsia: hasCjk ? cluster.fontFamily : '宋体',
+      // One PDF font stands for both halves of the pair: a CJK face names the
+      // eastAsia side and takes Times New Roman as its Latin partner, while an
+      // English face keeps its own family on the Latin side.
+      name: cjk || hasCjk ? 'Times New Roman' : latin ?? cluster.fontFamily,
+      eastAsia: cjk ?? '宋体',
       size: Math.round(cluster.fontSize * 2),
       bold: cluster.bold || undefined,
       italic: cluster.italic || undefined,
@@ -257,7 +382,10 @@ function clusterToParagraphStyle(
 function inferFirstLineIndent(cluster: StyleCluster, body: StyleCluster): number {
   if (cluster.id !== body.id || cluster.lines.length < 4) return 0;
   const starts = cluster.lines.map(line => line.x).sort((a, b) => a - b);
-  const left = quantile(starts, 0.2);
+  // The column's left edge is its leftmost line. Using the 20th percentile put
+  // the measured left margin inside the column whenever a paragraph's indented
+  // first line was at the percentile, which measured the indent as margin.
+  const left = quantile(starts, 0.05);
   const indented = starts.filter(start => start - left >= body.fontSize * 1.5 && start - left <= body.fontSize * 3);
   if (indented.length < Math.max(2, starts.length * 0.1)) return 0;
   const indent = median(indented.map(start => start - left));
@@ -285,7 +413,15 @@ function inferRole(
 ): BlockType {
   if (cluster.id === body.id) return 'paragraph';
   const sample = cluster.lines.map(line => line.text).join('\n');
-  const numberedHeading = sample.match(/^(?:第.{1,12}[章节]|chapter\s+\d+|\d+(?:\.\d+){0,3}\s+\S)/im)?.[0];
+  // A table-of-contents line reads "1 Introduction ........ 3": it starts like
+  // a numbered heading but is set in the body size. Requiring a heading to be
+  // larger than the body keeps a TOC entry — or a numbered paragraph — out of
+  // the heading roles, which is what used to make the 10.5 pt TOC an h1.
+  const dotLeader = /(?:\.{3,}|…{2,})\s*\d+\s*$/m.test(sample);
+  const largerThanBody = cluster.fontSize > body.fontSize * 1.05;
+  const numberedHeading = !dotLeader && largerThanBody
+    ? sample.match(/^(?:第.{1,12}[章节]|chapter\s+\d+|\d+(?:\.\d+){0,3}\s+\S)/im)?.[0]
+    : undefined;
   if (numberedHeading) {
     const dots = (numberedHeading.match(/\./g) ?? []).length;
     return `heading${Math.min(4, dots + 1)}` as BlockType;
@@ -302,14 +438,26 @@ function inferPageSettings(
   body: StyleCluster,
 ): PageSettings {
   const bodyLines = body.lines.length ? body.lines : lines;
-  const leftPoints = quantile(bodyLines.map(line => line.x), 0.2);
-  const rightPoints = quantile(bodyLines.map(line => line.pageWidth - line.right), 0.2);
+  // A running head and a page number are printed outside the text column, so
+  // they are not part of the page's margins. Measuring every line measured the
+  // header instead: the built-in USTB template's 2.5 cm top margin came out as
+  // 1.5 cm, because its running head sits there.
+  const contentLines = lines.filter(line => !isMarginalLine(line, body));
+  const measured = contentLines.length ? contentLines : lines;
+  // The left edge is the column's leftmost line: a paragraph's indented first
+  // line sits inside the column, and the 20th percentile measured it as margin.
+  const leftPoints = quantile(bodyLines.map(line => line.x), 0.05);
+  const rightPoints = quantile(bodyLines.map(line => line.pageWidth - line.right), 0.05);
   const pageGroups = new Map<number, PdfLine[]>();
-  for (const line of lines) pageGroups.set(line.page, [...(pageGroups.get(line.page) ?? []), line]);
-  const topPoints = median([...pageGroups.values()].map(pageLines => {
+  for (const line of measured) pageGroups.set(line.page, [...(pageGroups.get(line.page) ?? []), line]);
+  // The margin is where text can start on the page, so the pages whose first
+  // element sits highest drive it. A chapter heading carries 段前 spacing and
+  // puts its glyphs below the margin, so the median measured that spacing as
+  // margin (3.6 cm for a section whose text starts at 2.5 cm).
+  const topPoints = quantile([...pageGroups.values()].map(pageLines => {
     const topLine = pageLines.reduce((top, line) => line.y > top.y ? line : top);
     return Math.max(0, topLine.pageHeight - topLine.y - topLine.fontSize);
-  }));
+  }), 0.25);
   const bottomPoints = median([...pageGroups.values()].map(pageLines => {
     const bottomLine = pageLines.reduce((bottom, line) => line.y < bottom.y ? line : bottom);
     return Math.max(0, bottomLine.y - bottomLine.fontSize * 0.25);
@@ -327,6 +475,14 @@ function inferPageSettings(
     columns,
     ...(columns > 1 ? { columnGutter: inferColumnGutter(bodyLines, firstPage.width) } : {}),
   };
+}
+
+/** A small line printed in the page's running-head or footer band. */
+function isMarginalLine(line: PdfLine, body: StyleCluster): boolean {
+  const small = line.fontSize < body.fontSize * 0.95;
+  const inHeaderBand = line.y > line.pageHeight * HEADER_BAND;
+  const inFooterBand = line.y < line.pageHeight * FOOTER_BAND;
+  return small && (inHeaderBand || inFooterBand);
 }
 
 function inferColumns(lines: PdfLine[], pageWidth: number): number {
