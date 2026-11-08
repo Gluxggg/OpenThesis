@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, delimiter } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { buildTestPdf } from './helpers/pdf.mjs';
 
 const cli = resolve('packages/cli/dist/index.js');
 
-function run(args, cwd = process.cwd()) {
-  return spawnSync(process.execPath, [cli, ...args], { cwd, encoding: 'utf8' });
+function run(args, cwd = process.cwd(), env = process.env) {
+  return spawnSync(process.execPath, [cli, ...args], { cwd, encoding: 'utf8', env });
 }
 
 test('help exits successfully', () => {
@@ -378,4 +378,57 @@ test('build does not guess a legacy document type from its title', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /document built successfully!/);
   assert.doesNotMatch(result.stdout, /journal article/);
+});
+
+function ocrInstalled() {
+  const lookup = process.platform === 'win32' ? 'where' : 'which';
+  return spawnSync(lookup, ['ocrmypdf'], { encoding: 'utf8' }).status === 0;
+}
+
+test('a scanned PDF explains how to run OCR when no OCR tool is installed', (t) => {
+  if (ocrInstalled()) {
+    t.skip('ocrmypdf is installed on this machine');
+    return;
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'openthesis-cli-'));
+  const input = join(dir, 'scanned.pdf');
+  writeFileSync(input, buildTestPdf({ text: false }));
+
+  const result = run(['parse', input]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /looks scanned/);
+  assert.match(result.stderr, /OCRmyPDF/);
+});
+
+test('a scanned PDF is OCRed with ocrmypdf when the tool is on the path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'openthesis-cli-'));
+  const binDir = join(dir, 'bin');
+  mkdirSync(binDir);
+  const fake = join(dir, 'fake-ocr.mjs');
+  // The fake stands in for ocrmypdf: `--version` succeeds, and a real run
+  // writes a PDF with a text layer to the output path (its last argument).
+  writeFileSync(fake, [
+    "import { writeFileSync } from 'node:fs';",
+    'const args = process.argv.slice(2);',
+    "if (!args.includes('--skip-text')) process.exit(0);",
+    'const out = args[args.length - 1];',
+    `writeFileSync(out, Buffer.from('${buildTestPdf().toString('base64')}', 'base64'));`,
+    '',
+  ].join('\n'));
+  if (process.platform === 'win32') {
+    writeFileSync(join(binDir, 'ocrmypdf.cmd'), `@echo off\r\n"${process.execPath}" "${fake}" %*\r\n`);
+  } else {
+    const script = join(binDir, 'ocrmypdf');
+    writeFileSync(script, `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`);
+    chmodSync(script, 0o755);
+  }
+
+  const input = join(dir, 'scanned.pdf');
+  writeFileSync(input, buildTestPdf({ text: false }));
+  const env = { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}` };
+  const result = run(['parse', input], dir, env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /running local OCR/);
+  const template = JSON.parse(readFileSync(join(dir, 'scanned.template.json'), 'utf8'));
+  assert.equal(template.meta.sourceFormat, 'pdf');
 });

@@ -10,8 +10,10 @@
 //   `--force`/`-y` are accepted by every command that writes a file.
 // ============================================================
 
-import { readFileSync, writeFileSync, realpathSync, mkdirSync, existsSync } from 'fs';
-import { resolve, dirname, extname, basename } from 'path';
+import { readFileSync, writeFileSync, realpathSync, mkdirSync, existsSync, mkdtempSync, rmSync } from 'fs';
+import { resolve, dirname, extname, basename, join } from 'path';
+import { tmpdir } from 'os';
+import { spawnSync } from 'child_process';
 import { parsePdfTemplate, parseTemplate } from '@openthesis/template-parser';
 import { parseMarkdown } from '@openthesis/markdown-parser';
 import { renderLegacy, createUSTBTemplate, renderDocument } from '@openthesis/docx-renderer';
@@ -119,12 +121,24 @@ async function cmdParse(args: string[]) {
 
   try {
     const buffer = readFileSync(templatePath);
-    const parse = templateExtension === '.pdf' ? parsePdfTemplate : parseTemplate;
-    const template = await parse(buffer, {
+    const metadata = {
       organization: orgName,
       documentType: docType,
       sourceFile: templatePath,
-    });
+    };
+    let template: DocumentTemplate;
+    if (templateExtension === '.pdf') {
+      try {
+        template = await parsePdfTemplate(buffer, metadata);
+      } catch (error: unknown) {
+        // A scanned PDF has no text layer. When the machine has OCRmyPDF, give
+        // it a turn instead of refusing outright.
+        if (!isScannedPdf(error)) throw error;
+        template = await parsePdfViaOcr(templatePath, metadata);
+      }
+    } else {
+      template = await parseTemplate(buffer, metadata);
+    }
 
     const outPath = templatePath.slice(0, -extname(templatePath).length) + '.template.json';
     ensureOverwritable(outPath, args);
@@ -607,6 +621,60 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** What `parsePdfTemplate` throws when the PDF carries no text layer. */
+function isScannedPdf(error: unknown): boolean {
+  return /run OCR first/i.test(errorMessage(error));
+}
+
+const OCR_HINT = 'Install OCRmyPDF (pip install ocrmypdf) or Tesseract, or run OCR on the file first and retry.';
+
+type PdfTemplateMeta = NonNullable<Parameters<typeof parsePdfTemplate>[1]>;
+
+/**
+ * OCR a scanned PDF with the local `ocrmypdf`, then parse the text layer it
+ * adds.
+ *
+ * The tool is looked up through the shell on Windows, where it is a `.cmd`; a
+ * missing tool is a clear message rather than a stack trace, and a failing run
+ * reports what it printed. The OCR copy lives in a temp directory and is
+ * removed either way.
+ */
+async function parsePdfViaOcr(filePath: string, metadata: PdfTemplateMeta): Promise<DocumentTemplate> {
+  if (!hasOcrTool()) {
+    throw new Error(`No text layer was found (the PDF looks scanned). ${OCR_HINT}`);
+  }
+  console.log('   No text layer found; running local OCR with ocrmypdf...');
+  const workDir = mkdtempSync(join(tmpdir(), 'openthesis-ocr-'));
+  const ocrPath = join(workDir, 'ocr.pdf');
+  try {
+    const result = runOcrCommand(['--skip-text', '--output-type', 'pdf', filePath, ocrPath]);
+    if (result.status !== 0 || !existsSync(ocrPath)) {
+      const detail = String(result.stderr ?? result.stdout ?? '').trim();
+      throw new Error(`OCR failed${detail ? `: ${detail}` : ''}. ${OCR_HINT}`);
+    }
+    return await parsePdfTemplate(readFileSync(ocrPath), metadata);
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
+function hasOcrTool(): boolean {
+  return runOcrCommand(['--version']).status === 0;
+}
+
+/** Run `ocrmypdf`, resolving it through the shell on Windows (`.cmd`). */
+function runOcrCommand(ocrArgs: string[]): ReturnType<typeof spawnSync> {
+  if (process.platform === 'win32') {
+    const line = ['ocrmypdf', ...ocrArgs].map(quoteShellArg).join(' ');
+    return spawnSync(line, { shell: true, encoding: 'utf-8' });
+  }
+  return spawnSync('ocrmypdf', ocrArgs, { encoding: 'utf-8' });
+}
+
+function quoteShellArg(value: string): string {
+  return /[\s"]/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
+}
+
 function isMarkdownPath(path: string): boolean {
   return ['.md', '.markdown'].includes(extname(path).toLowerCase());
 }
@@ -659,7 +727,7 @@ function printHelp() {
     -                     Read the input from stdin (build, import)
 
   Options by command — a flag outside its row is an error:
-    parse <template.docx>    --type <t>  --org <name>
+    parse <template.docx>    --type <t>  --org <name>   (a scanned PDF is OCR'd with ocrmypdf when installed)
     import <content.md>      --type <t>  -o <content.json>    (stdin input requires -o)
     build <content.json|md>  --type <t>  -t <template.json>   (default: built-in USTB)
                              --no-page-restart          Continue page numbers across the
