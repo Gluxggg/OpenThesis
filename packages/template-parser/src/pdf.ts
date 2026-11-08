@@ -4,6 +4,7 @@ import type {
   PageSettings,
   ParagraphFormatting,
   ParagraphStyle,
+  RunningHeadSlots,
   TemplateMeta,
 } from '@openthesis/document-schema';
 
@@ -148,7 +149,10 @@ export async function parsePdfTemplate(
 
   const clusters = buildStyleClusters(lines);
   const body = clusters.reduce((largest, current) => current.weight > largest.weight ? current : largest);
-  const page = inferPageSettings(pageSizes[0], lines, body);
+  const page: PageSettings = {
+    ...inferPageSettings(pageSizes[0], lines, body),
+    ...inferRunningHeads(lines, body),
+  };
   const styles: Record<string, ParagraphStyle> = {};
   const styleRoles: Record<string, BlockType> = {};
   const headingClusters = clusters
@@ -187,6 +191,9 @@ export async function parsePdfTemplate(
       parsedAt: new Date().toISOString(),
     },
     page,
+    // A head that differs by parity only prints correctly when Word is told the
+    // document uses odd and even heads.
+    evenAndOddHeaders: Boolean(page.headers?.even || page.footers?.even),
     styles,
     styleRoles,
   };
@@ -475,6 +482,83 @@ function inferPageSettings(
     columns,
     ...(columns > 1 ? { columnGutter: inferColumnGutter(bodyLines, firstPage.width) } : {}),
   };
+}
+
+/**
+ * The text a PDF prints outside the text column on every page.
+ *
+ * Those lines are excluded from the margin measurement; here they are read for
+ * what they say. A head that differs between odd and even pages becomes the two
+ * OOXML slots the renderer understands, a footer that is only a page number
+ * becomes `pageNumber`, and the distance Word measures each from the page edge
+ * is estimated from where the line sits.
+ */
+function inferRunningHeads(
+  lines: PdfLine[],
+  body: StyleCluster,
+): Pick<PageSettings, 'headers' | 'footers' | 'headerDistance' | 'footerDistance'> {
+  const marginal = lines.filter(line => isMarginalLine(line, body));
+  const headers = marginal.filter(line => line.y > line.pageHeight * HEADER_BAND);
+  const footers = marginal.filter(line => line.y < line.pageHeight * FOOTER_BAND);
+  const inferred: Pick<PageSettings, 'headers' | 'footers' | 'headerDistance' | 'footerDistance'> = {};
+
+  const headerSlots = runningHeadSlots(headers);
+  if (headerSlots) inferred.headers = headerSlots;
+  const footerSlots = runningHeadSlots(footers);
+  if (footerSlots) inferred.footers = footerSlots;
+
+  if (headers.length > 0) {
+    inferred.headerDistance = Math.round(median(headers.map(
+      line => Math.max(0, line.pageHeight - line.y - line.fontSize),
+    )) * POINTS_TO_TWIPS);
+  }
+  if (footers.length > 0) {
+    inferred.footerDistance = Math.round(median(footers.map(
+      line => Math.max(0, line.y - line.fontSize * 0.25),
+    )) * POINTS_TO_TWIPS);
+  }
+  return inferred;
+}
+
+function runningHeadSlots(lines: PdfLine[]): RunningHeadSlots | undefined {
+  if (lines.length === 0) return undefined;
+  const oddText = mostCommonText(lines.filter(line => line.page % 2 === 1));
+  const evenText = mostCommonText(lines.filter(line => line.page % 2 === 0));
+
+  if (!oddText && !evenText) {
+    // Nothing but page numbers: the slot still has to draw the number.
+    return lines.some(line => isPageNumberText(cleanRunningText(line.text)))
+      ? { default: { pageNumber: true } }
+      : undefined;
+  }
+
+  const slots: RunningHeadSlots = {};
+  if (oddText) slots.default = { text: oddText };
+  if (evenText && evenText !== oddText) slots.even = { text: evenText };
+  return slots;
+}
+
+/** The text that repeats across the pages in this band, ignoring page numbers. */
+function mostCommonText(lines: PdfLine[]): string | undefined {
+  const counts = new Map<string, number>();
+  for (const line of lines) {
+    const text = cleanRunningText(line.text);
+    if (!text || isPageNumberText(text)) continue;
+    counts.set(text, (counts.get(text) ?? 0) + 1);
+  }
+  const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  // One occurrence is enough: a short sample may carry the even-page head on a
+  // single sampled page, and a head repeated on two pages still wins by count.
+  return best && best[0].length >= 2 ? best[0] : undefined;
+}
+
+function cleanRunningText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/** `12`, `IV`, `iv` — a page number rather than a running head. */
+function isPageNumberText(text: string): boolean {
+  return /^(?:\d{1,4}|[ivxlcdm]{1,7})$/i.test(text);
 }
 
 /** A small line printed in the page's running-head or footer band. */

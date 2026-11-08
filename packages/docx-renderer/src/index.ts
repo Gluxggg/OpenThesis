@@ -3044,6 +3044,12 @@ function partRunningHeads<T extends Header | Footer>(
     return { default: runningHeadElement<T>(kind, { text, pageNumber }) };
   }
 
+  // A cover carries no running head unless the template declares a first-page
+  // slot of its own. A PDF-derived template has one set of slots and no page
+  // sections, so without this the cover, the front matter and the body would
+  // all print the same head.
+  if (role === 'cover' && !slots.first) return undefined;
+
   const group: RunningHeadGroup<T> = {};
   for (const slot of ['default', 'even', 'first'] as const) {
     const spec = slots[slot];
@@ -3135,12 +3141,26 @@ function buildSingleSection(
   template: DocumentTemplate,
   options: { generatedHeader: string; official: boolean; showPageNumbers: boolean },
 ): ISectionOptions {
-  const headers = options.official ? undefined : {
-    default: runningHeadElement<Header>('header', { text: options.generatedHeader }),
-  };
-  const footers = options.showPageNumbers ? {
-    default: runningHeadElement<Footer>('footer', { pageNumber: true }),
-  } : undefined;
+  // A PDF-derived template is the one that describes its own head: the text was
+  // read out of the page bands, so it is the template's own text and must win
+  // over the generated fallback. A DOCX template declares its heads per section
+  // and is served by the multi-section path; this one keeps the generated head.
+  const describesOwnHeads = template.meta.sourceFormat === 'pdf';
+  const headerSlots = describesOwnHeads ? template.page.headers : undefined;
+  const footerSlots = describesOwnHeads ? template.page.footers : undefined;
+  const headers = options.official ? undefined
+    : headerSlots
+      ? partRunningHeads<Header>(headerSlots, 'header', 'body', {
+        showPageNumbers: options.showPageNumbers,
+      })
+      : { default: runningHeadElement<Header>('header', { text: options.generatedHeader }) };
+  const footers = !options.showPageNumbers ? undefined
+    : footerSlots
+      ? partRunningHeads<Footer>(footerSlots, 'footer', 'body', {
+        showPageNumbers: true,
+        fallbackPageNumber: true,
+      })
+      : { default: runningHeadElement<Footer>('footer', { pageNumber: true }) };
 
   return {
     properties: pageProperties(template.page),
@@ -3294,7 +3314,10 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   // 偶数页页眉 is written only when the output really asks for an even-page
   // head: the flag also demotes `w:type="default"` to odd pages, so setting it
   // while emitting no even reference would leave the even pages' head blank.
-  const templateCarriesHeads = templateSections.some(section => section.headers || section.footers);
+  const templateCarriesHeads = templateSections.some(section => section.headers || section.footers)
+    // A PDF-derived template carries its heads on `page` instead of in
+    // `pageSections`: the text was read off the pages, not out of section parts.
+    || (template.meta.sourceFormat === 'pdf' && Boolean(template.page.headers || template.page.footers));
   buffer = await postProcess(buffer, {
     mirrorMargins: Boolean(template.page.mirrorMargins),
     evenAndOddHeaders: evenReference || (Boolean(template.evenAndOddHeaders) && templateCarriesHeads),

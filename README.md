@@ -52,7 +52,7 @@ Many universities, journals, and government agencies publish their formatting gu
 | Input | Current support | Notes |
 | --- | --- | --- |
 | `.docx` template | ✅ Native | Extracts named styles, inheritance, page geometry, headers, footers, and columns |
-| Text-based `.pdf` | ✅ Heuristic inference | Infers page size, margins, columns, fonts, sizes, alignment, line spacing, and semantic roles |
+| Text-based `.pdf` | ✅ Heuristic inference | Infers page size, margins, columns, fonts, sizes, weights, alignment, line spacing, semantic roles, and the running heads and page number |
 | Scanned `.pdf` | ⚠️ OCR required | Returns a clear error when the PDF contains no extractable text |
 | Markdown / OpenThesis JSON | ✅ Native | Used as document content and rendered to editable DOCX |
 
@@ -64,7 +64,7 @@ node packages/cli/dist/index.js parse format-guide.pdf \
 
 PDF stores positioned glyphs instead of named Word styles. OpenThesis groups text into lines, reads each font's PostScript name off the page's font objects (`SimSun`, `SimHei`, `TimesNewRomanPS-BoldMT`) and maps it to the family the writing guide names — 宋体, 黑体, 楷体, 仿宋 — keeping the bold and italic the face itself declares. It measures the text column rather than the running head or a paragraph's first-line indent, and treats a numbered line as a heading only when it is set larger than the body, so a table of contents does not turn into a chapter. The generated JSON still carries warnings, because inference cannot recover information the file does not encode.
 
-Review the generated template before production use. Exact table borders, drawing objects, headers/footers, footnotes, and scanned pages remain outside this first PDF slice; advanced reconstruction and built-in OCR remain planned for V4.
+Review the generated template before production use. Exact table borders, drawing objects, footnotes, and scanned pages remain outside this first PDF slice; the running heads (odd and even) and the footer page number are read out of the page bands and carried into the template, and advanced reconstruction plus built-in OCR remain planned for V4.
 
 ## Quick Start
 

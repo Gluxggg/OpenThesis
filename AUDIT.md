@@ -1263,3 +1263,25 @@ I, body from 1) requires the restart that Word aligns. Nothing was changed for
 this; it is recorded here so the next report does not re-open it.
 
 `pnpm check`: 234 tests, all passing.
+
+---
+
+## 29. The running heads a PDF only shows on the page
+
+The PDF slice measured the text column and threw the bands away. The running
+head and the footer number are printed there, so a PDF-derived template lost
+both: the renderer fell back to `{organization}学位论文` and a generated page
+number, even when the source PDF named the school on every odd page.
+
+The marginal lines are read for what they say now. A head that repeats on odd
+pages and one that repeats on even pages become the two OOXML slots, a band that
+carries only a page number becomes `pageNumber`, and the header/footer distance
+is estimated from where the line sits. Both come out of the USTB thesis PDF, and
+a document built from that inferred template prints 北京科技大学硕士学位论文 on
+odd pages and the thesis title on even ones — the texts the source PDF printed.
+
+Only a PDF-derived template uses these heads: a DOCX template keeps its
+per-section parts in the multi-section path, and a journal keeps the no-invented-
+head rule.
+
+`pnpm check`: 235 tests, all passing.

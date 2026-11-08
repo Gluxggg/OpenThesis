@@ -612,6 +612,28 @@ test('a table-of-contents line is not read as a heading', async () => {
   assert.equal(heading && template.styleRoles[heading[0]], 'heading1');
 });
 
+test('reads the running head and the footer page number out of the bands', async () => {
+  // The head and the number are printed outside the text column, so they used
+  // to be excluded from the margins and then dropped. Here they become the
+  // template's own header/footer slots.
+  const page = (head, number) => [
+    { text: head, x: 200, y: 760, size: 9 },
+    { text: 'The body text carries the bulk of the sampled characters.', x: 72, y: 700, size: 12 },
+    { text: 'so the dominant cluster is the paragraph style.', x: 72, y: 680, size: 12 },
+    { text: 'A third line makes the body cluster large enough to win.', x: 72, y: 660, size: 12 },
+    { text: 'A fourth line keeps the inferred margins stable.', x: 72, y: 640, size: 12 },
+    { text: number, x: 300, y: 40, size: 9 },
+  ];
+  const template = await parsePdfTemplate(buildLinedPdf({
+    pages: [page('Odd Head', '1'), page('Even Head', '2')],
+  }), { documentType: 'thesis' });
+
+  assert.equal(template.page.headers?.default?.text, 'Odd Head');
+  assert.equal(template.page.headers?.even?.text, 'Even Head');
+  assert.equal(template.page.footers?.default?.pageNumber, true);
+  assert.equal(template.page.headers?.default?.text?.includes('Odd Head'), true);
+});
+
 test('carries w:keepNext and w:keepLines through to the style', async () => {
   // Both flags were parsed into RawParagraphProps and merged into every resolved
   // style, but `ParagraphFormatting` had no field to hold them, so they were
