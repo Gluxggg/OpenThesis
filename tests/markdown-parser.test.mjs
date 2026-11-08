@@ -235,9 +235,27 @@ test('keeps a Markdown table cell’s formatting as runs', () => {
 });
 
 test('keeps a trailing hash that is not a closing sequence', () => {
-  // CommonMark needs a space before the closing `#` run, so `# C#` keeps it.
+  // CommonMark needs a space before the closing `#` run, so `# C#` keeps its `#`.
   assert.equal(parseMarkdown('# C#\n\nbody').meta.title, 'C#');
   assert.equal(parseMarkdown('# Title ##\n\nbody').meta.title, 'Title');
+});
+
+test('a footnote definition leaves the body and a reference keeps its id', () => {
+  const document = parseMarkdown([
+    '---',
+    'title: Footnotes',
+    '---',
+    '',
+    '正文带脚注[^1]。',
+    '',
+    '[^1]: 这是脚注内容。',
+  ].join('\n'));
+
+  assert.deepEqual(document.footnotes, [{ id: '1', text: '这是脚注内容。' }]);
+  // The definition line is not body text.
+  assert.equal(JSON.stringify(document.sections).includes('这是脚注内容'), false);
+  const paragraph = document.sections[0].content.find(block => block.type === 'paragraph');
+  assert.ok(paragraph?.runs?.some(run => run.footnoteRef === '1'));
 });
 
 test('reads a front-matter block sequence', () => {

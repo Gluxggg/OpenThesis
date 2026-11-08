@@ -1285,3 +1285,41 @@ per-section parts in the multi-section path, and a journal keeps the no-invented
 head rule.
 
 `pnpm check`: 235 tests, all passing.
+
+---
+
+## 30. Tables, scanned pages and footnotes
+
+Three things the PDF and Markdown slices used to leave for the reader.
+
+### The table rules are drawn in the content stream
+
+A PDF-derived template had no `tableFormat`, so the renderer fell back to its own
+borders. The operator list was already being read for font names; it also carries
+`constructPath` with the strokes and thin filled rectangles a table is drawn with.
+Those become rules, rules sharing a row are merged, rows that overlap and sit
+close become a table, and the strongest candidate is written into `tableFormat`:
+rule weights into `w:sz` (a 1.44 pt border -> `w:sz="12"`), a shaded header band
+into `w:shd`. Two filters keep a three-line table from being read as a grid: rules
+in the running-head band are dropped (a 篇眉 rule merged into the template's table
+as a fourth row), and hairline rules far thinner than the strongest border are
+ignored (0.24 pt artefacts beside a 1.44 pt border). Inferred from the USTB thesis
+PDF: top/bottom 1.5 pt, no `insideV`, no `insideH` — a three-line table.
+
+### A scanned PDF gets a local OCR
+
+`parse` used to answer a scanned PDF with "run OCR first". It now looks for
+`ocrmypdf` (through the shell on Windows, where it is a `.cmd`), OCRs the file
+into a temporary copy and parses that; the copy is removed either way. Without
+the tool the message names OCRmyPDF and Tesseract. The test puts a fake
+`ocrmypdf` on the PATH and checks the whole path: detection, the run, and parsing
+the PDF it writes.
+
+### Markdown footnotes become Word footnotes
+
+`[^1]: …` leaves the body and `[^1]` becomes a `FootnoteReferenceRun`; the
+definition is written into the `footnotes` part of the package, which Word
+numbers itself. `InlineRun.footnoteRef` carries the reference; the validator
+allows a reference run to have no text of its own.
+
+`pnpm check`: 244 tests, all passing.

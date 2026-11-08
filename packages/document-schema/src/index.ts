@@ -408,6 +408,8 @@ export interface InlineRun {
   code?: boolean;
   /** The target of `[label](url)`; renders as a real Word hyperlink. */
   href?: string;
+  /** The id of a footnote this run references (`[^1]`). */
+  footnoteRef?: string;
 }
 
 export interface HeadingBlock extends BaseBlock {
@@ -593,12 +595,28 @@ export type ContentBlock =
 // ── 1. THESIS (学位论文) ────────────────────────────────────
 // ════════════════════════════════════════════════════════════
 
+/**
+ * A footnote a Markdown definition line supplied.
+ *
+ * `[^1]: 说明` at block level defines it; `[^1]` in a paragraph is the
+ * reference, carried by `InlineRun.footnoteRef`. The renderer turns both into a
+ * real Word footnote rather than leaving the marker as body text.
+ */
+export interface FootnoteDefinition {
+  id: string;
+  /** The flattened text, as every text-only consumer reads it. */
+  text: string;
+  /** Inline formatting spans, when the definition carried any. */
+  runs?: InlineRun[];
+}
+
 export interface ThesisDocument {
   type: 'thesis';
   meta: ThesisMeta;
   cover: ContentBlock[];
   sections: ThesisSection[];
   backMatter?: ThesisBackMatter;
+  footnotes?: FootnoteDefinition[];
 }
 
 export interface ThesisMeta {
@@ -719,6 +737,7 @@ export interface JournalArticle {
   backMatter?: JournalBackMatter;
   /** Rows of the journal's fixed opening table, when it asks for one. */
   specifications?: SpecificationRow[];
+  footnotes?: FootnoteDefinition[];
 }
 
 export interface JournalMeta {
@@ -846,6 +865,7 @@ export interface OfficialDocument {
   meta: OfficialMeta;
   body: ContentBlock[];
   attachments?: OfficialAttachment[];
+  footnotes?: FootnoteDefinition[];
 }
 
 export interface OfficialMeta {

@@ -52,8 +52,8 @@ Many universities, journals, and government agencies publish their formatting gu
 | Input | Current support | Notes |
 | --- | --- | --- |
 | `.docx` template | ✅ Native | Extracts named styles, inheritance, page geometry, headers, footers, and columns |
-| Text-based `.pdf` | ✅ Heuristic inference | Infers page size, margins, columns, fonts, sizes, weights, alignment, line spacing, semantic roles, and the running heads and page number |
-| Scanned `.pdf` | ⚠️ OCR required | Returns a clear error when the PDF contains no extractable text |
+| Text-based `.pdf` | ✅ Heuristic inference | Infers page size, margins, columns, fonts, sizes, weights, alignment, line spacing, semantic roles, the running heads and page number, and the table rules |
+| Scanned `.pdf` | ✅ With OCRmyPDF | `parse` runs OCRmyPDF locally when the PDF has no text layer; without it the error says what to install |
 | Markdown / OpenThesis JSON | ✅ Native | Used as document content and rendered to editable DOCX |
 
 ```bash
@@ -62,9 +62,9 @@ node packages/cli/dist/index.js parse format-guide.pdf \
 # → format-guide.template.json
 ```
 
-PDF stores positioned glyphs instead of named Word styles. OpenThesis groups text into lines, reads each font's PostScript name off the page's font objects (`SimSun`, `SimHei`, `TimesNewRomanPS-BoldMT`) and maps it to the family the writing guide names — 宋体, 黑体, 楷体, 仿宋 — keeping the bold and italic the face itself declares. It measures the text column rather than the running head or a paragraph's first-line indent, and treats a numbered line as a heading only when it is set larger than the body, so a table of contents does not turn into a chapter. The generated JSON still carries warnings, because inference cannot recover information the file does not encode.
+PDF stores positioned glyphs instead of named Word styles. OpenThesis groups text into lines, reads each font's PostScript name off the page's font objects (`SimSun`, `SimHei`, `TimesNewRomanPS-BoldMT`) and maps it to the family the writing guide names — 宋体, 黑体, 楷体, 仿宋 — keeping the bold and italic the face itself declares. It measures the text column rather than the running head or a paragraph's first-line indent, and treats a numbered line as a heading only when it is set larger than the body, so a table of contents does not turn into a chapter. The drawn rules are read too: a three-line table or a full grid becomes `tableFormat`, so the generated document keeps the template's border weights and a shaded header band. The generated JSON still carries warnings, because inference cannot recover information the file does not encode.
 
-Review the generated template before production use. Exact table borders, drawing objects, footnotes, and scanned pages remain outside this first PDF slice; the running heads (odd and even) and the footer page number are read out of the page bands and carried into the template, and advanced reconstruction plus built-in OCR remain planned for V4.
+Review the generated template before production use. Drawing objects, footnotes and scanned pages without a text layer remain outside this PDF slice; the running heads, footer page number and table rules are read out of the page bands and paths. A scanned PDF is OCR'd with a locally installed OCRmyPDF, otherwise `parse` tells you what to install.
 
 ## Quick Start
 
@@ -146,7 +146,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 ## Features
 
 - ✅ **Style inheritance resolution** — DOCX `basedOn` chains are recursively resolved
-- ✅ **Text-based PDF templates** — Font faces, weights and the text column are inferred into the same reusable style DSL, not just sizes (heuristic; see the PDF scope note above)
+- ✅ **Text-based PDF templates** — Font faces, weights, the text column, running heads and table rules are inferred into the same reusable style DSL, not just sizes (heuristic; see the PDF scope note above)
 - ✅ **Template-silent vs. explicit formatting** — A style declares only what the template actually specifies; the renderer fills the rest from domain defaults (学位论文 vs. GB/T 9704 公文), so a formatting-free template still produces correct headings
 - ✅ **Semantic role detection** — Heuristically maps style names → block types (e.g. "标题 1" → heading1), restricted to paragraph styles and anchored so `Table Grid` is not mistaken for a heading
 - ✅ **Page geometry extraction** — Margins, page size, columns from every section, including paragraph-level section breaks
@@ -159,7 +159,9 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 - ✅ **Real Word lists** — Auto-numbered bullets and numbering via OOXML, with each list restarting its own counter
 - ✅ **Lists, code blocks, and blockquotes** — Native paragraph rendering with borders and indents
 - ✅ **Markdown import** — Front matter (scalars, flow sequences, block sequences), nested sections, lists, tables, figures, code, quotes, and display equations
-- ✅ **Inline formatting** — `**bold**`, `*italic*`, `` `code` ``, `~~strikethrough~~` and `[links](url)` become real Word runs and hyperlink relationships instead of being flattened to plain text
+- ✅ **Inline formatting** — `**bold**`, `*italic*`, `` `code` ``, `~~strikethrough~~` and `[links](url)` become real Word runs and hyperlink relationships instead of being flattened to plain text; nested emphasis and table-cell formatting are kept too
+- ✅ **Markdown footnotes** — `[^1]` references and their definitions become real Word footnotes, numbered by Word
+- ✅ **Scanned PDFs** — `parse` runs a locally installed OCRmyPDF when a PDF has no text layer
 - ✅ **Direct Markdown builds** — `.md` → `.docx` without an intermediate file
 - ✅ **Agent-ready Skill** — Standard `SKILL.md`, executable wrapper, UI metadata, and progressive references
 - ✅ **Native Office Math core** — Fractions, roots, scripts, sums, integrals, symbols, and Greek letters emit OMML

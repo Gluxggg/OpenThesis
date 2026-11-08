@@ -199,6 +199,35 @@ test('renders formatted runs inside table cells', async () => {
   assert.match(xml, /斜体单元格/);
 });
 
+test('renders a Markdown footnote as a real Word footnote', async () => {
+  // `[^1]` used to stay body text. The reference becomes a footnote marker and
+  // the definition moves into `word/footnotes.xml`, which Word numbers itself.
+  const buffer = await renderDocument({
+    outputPath: '',
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Footnotes' }, cover: [],
+      footnotes: [{ id: '1', text: '这是脚注内容。' }],
+      sections: [{
+        id: 'note', type: 'chapter', title: 'Note',
+        content: [{
+          type: 'paragraph',
+          text: '正文带脚注[^1]。',
+          runs: [
+            { text: '正文带脚注' },
+            { text: '', footnoteRef: '1' },
+            { text: '。' },
+          ],
+        }],
+      }],
+    },
+  });
+  const { zip, xml } = await documentXml(buffer);
+  assert.match(xml, /w:footnoteReference/);
+  const footnotes = await zip.file('word/footnotes.xml').async('string');
+  assert.match(footnotes, /这是脚注内容/);
+});
+
 test('rejects tables without header columns', async () => {
   await assert.rejects(() => renderDocument({
     outputPath: '',

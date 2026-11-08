@@ -132,7 +132,44 @@ export function validateDocument(input: unknown): ValidationIssue[] {
   else if (type === 'journal') validateJournal(input, report);
   else validateOfficial(input, report);
 
+  validateFootnotes(input.footnotes, 'footnotes', report);
+
   return issues;
+}
+
+/**
+ * Validate the footnote definitions a Markdown file supplied.
+ *
+ * A definition names the id a `[^id]` reference uses; the renderer turns both
+ * into a Word footnote. The field is optional, so a document without footnotes
+ * validates exactly as before.
+ */
+function validateFootnotes(value: unknown, path: string, report: Report): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    report(path, `must be an array of footnote definitions, received ${describe(value)}`);
+    return;
+  }
+  value.forEach((entry, index) => {
+    const entryPath = `${path}[${index}]`;
+    if (!isObject(entry)) {
+      report(entryPath, `expected a footnote object, received ${describe(entry)}`);
+      return;
+    }
+    if (!isNonEmptyString(entry.id)) {
+      report(`${entryPath}.id`, `a footnote requires a non-empty id, received ${describe(entry.id)}`);
+    }
+    if (typeof entry.text !== 'string') {
+      report(`${entryPath}.text`, `must be a string, received ${describe(entry.text)}`);
+    }
+    if (entry.runs !== undefined) {
+      if (!Array.isArray(entry.runs)) {
+        report(`${entryPath}.runs`, `must be an array of runs, received ${describe(entry.runs)}`);
+      } else {
+        validateRunList(entry.runs, `${entryPath}.runs`, report);
+      }
+    }
+  });
 }
 
 /** Throw a single readable error listing every issue. */
@@ -422,9 +459,10 @@ function validateRunList(runs: unknown[], path: string, report: Report): void {
       report(runPath, `expected a run object, received ${describe(run)}`);
       return;
     }
-    // A run may be a single space: it separates two formatted spans. Only an
-    // empty string is meaningless.
-    if (typeof run.text !== 'string' || run.text.length === 0) {
+    // A run may be a single space: it separates two formatted spans. A footnote
+    // reference is a marker with no text of its own.
+    const footnoteMarker = isNonEmptyString(run.footnoteRef);
+    if (typeof run.text !== 'string' || (run.text.length === 0 && !footnoteMarker)) {
       report(`${runPath}.text`, `a run requires a non-empty string, received ${describe(run.text)}`);
     }
     for (const flag of INLINE_RUN_FLAGS) {
@@ -434,6 +472,9 @@ function validateRunList(runs: unknown[], path: string, report: Report): void {
     }
     if (run.href !== undefined && !isNonEmptyString(run.href)) {
       report(`${runPath}.href`, `must be a non-empty string when given, received ${describe(run.href)}`);
+    }
+    if (run.footnoteRef !== undefined && !footnoteMarker) {
+      report(`${runPath}.footnoteRef`, `must be a non-empty string when given, received ${describe(run.footnoteRef)}`);
     }
   });
 }

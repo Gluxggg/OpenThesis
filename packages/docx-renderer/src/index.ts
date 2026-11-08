@@ -17,7 +17,7 @@ import {
   MathSubScript, MathSubSuperScript,
   MathFunction, MathLimitLower, MathLimitUpper, BuilderElement,
   TableOfContents, TabStopType, LeaderType,
-  ExternalHyperlink,
+  ExternalHyperlink, FootnoteReferenceRun,
 } from 'docx';
 import type {
   ISectionOptions, ISectionPropertiesOptions, IPageNumberTypeAttributes,
@@ -29,6 +29,8 @@ import { validateDocument } from '@openthesis/document-schema';
 import type { Reference, ThesisMeta } from '@openthesis/document-schema';
 import type {
   DocumentTemplate,
+  DocumentType,
+  FootnoteDefinition,
   ThesisDocument,
   ThesisSection,
   JournalArticle,
@@ -894,6 +896,12 @@ function inlineRunChildren(
 ): (TextRun | DocxMath | XmlComponent)[] {
   const children: (TextRun | DocxMath | XmlComponent)[] = [];
   for (const run of runs) {
+    // A footnote reference is a marker, not text: Word numbers it from the
+    // footnote part, so the run carries only the reference id.
+    if (run.footnoteRef) {
+      children.push(new FootnoteReferenceRun(footnoteNumber(run.footnoteRef)));
+      continue;
+    }
     const bold = run.bold === true || forceBold === true || undefined;
     if (/\$|\[\[/.test(run.text)) {
       children.push(...styledRuns(run.text, style, bold, customSize));
@@ -3207,6 +3215,8 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
   STYLE_CACHE.delete(template);
   resetBookmarks();
   resetCaptionIndex();
+  resetFootnotes();
+  registerFootnotes(doc);
 
   // Shared across the whole document so list numbering instances stay unique.
   const state = createRenderState();
@@ -3307,6 +3317,7 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
     throw new Error(`Unsupported document type: "${String(type)}". Expected 'thesis', 'journal', or 'official'.`);
   }
 
+  const footnotes = footnoteConfig(template, doc.type);
   const wordDoc = new Document({
     numbering: { config: [...LIST_NUMBERING, ...templateNumberingConfig(template)] },
     // The 目录 is a field; Word builds its entries with the TOC1/TOC2/TOC3
@@ -3314,6 +3325,7 @@ export async function renderDocument(options: RenderOptions): Promise<Buffer> {
     // typography is silently ignored.
     styles: { paragraphStyles: tocEntryStyles(template) },
     sections,
+    ...(Object.keys(footnotes).length > 0 ? { footnotes } : {}),
   });
 
   let buffer = await Packer.toBuffer(wordDoc);
@@ -3823,6 +3835,56 @@ function nextBookmarkId(): number {
 /** Reset between renders, so two documents do not share a numbering. */
 function resetBookmarks(): void {
   bookmarkCounter = 0;
+}
+
+/**
+ * Footnotes: the definition a Markdown file supplied, and the number Word
+ * assigns when a reference is first met.
+ *
+ * Word numbers footnotes in reference order, so the number is assigned while
+ * rendering the body; the definitions are collected up front from the document.
+ */
+let footnoteNumbers = new Map<string, number>();
+let footnoteDefinitions = new Map<string, { text: string; runs?: InlineRun[] }>();
+
+function resetFootnotes(): void {
+  footnoteNumbers = new Map();
+  footnoteDefinitions = new Map();
+}
+
+function registerFootnotes(doc: OpenThesisDocument | LegacyDocumentJSON): void {
+  const definitions = (doc as { footnotes?: FootnoteDefinition[] }).footnotes;
+  if (!definitions) return;
+  for (const definition of definitions) {
+    footnoteDefinitions.set(definition.id, { text: definition.text, runs: definition.runs });
+  }
+}
+
+function footnoteNumber(id: string): number {
+  const existing = footnoteNumbers.get(id);
+  if (existing !== undefined) return existing;
+  const next = footnoteNumbers.size + 1;
+  footnoteNumbers.set(id, next);
+  return next;
+}
+
+/** The `footnotes` part, with an entry for every id a reference actually used. */
+function footnoteConfig(
+  template: DocumentTemplate,
+  docType: DocumentType,
+): { [id: number]: { children: Paragraph[] } } {
+  const style = resolveStyle(template, 'paragraph', docType);
+  const config: { [id: number]: { children: Paragraph[] } } = {};
+  for (const [id, number] of footnoteNumbers) {
+    const definition = footnoteDefinitions.get(id);
+    const children = definition?.runs
+      ? inlineRunChildren(definition.runs, style)
+      : styledRuns(definition?.text ?? '', style);
+    config[number] = {
+      children: [new Paragraph({ children, spacing: { after: 0 } })],
+    };
+  }
+  return config;
 }
 
 /**

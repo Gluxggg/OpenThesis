@@ -1,6 +1,7 @@
 import type {
   ContentBlock,
   DocumentType,
+  FootnoteDefinition,
   InlineRun,
   JournalArticle,
   JournalAuthor,
@@ -65,7 +66,8 @@ export function parseMarkdownWithMetadata(
   const { body, frontMatter: parsedFrontMatter } = extractFrontMatter(markdown);
   const frontMatter = { ...parsedFrontMatter, ...options.metadata };
   const documentType = resolveDocumentType(options.documentType, frontMatter.type);
-  const items = tokenize(body);
+  const footnotes = new Map<string, string>();
+  const items = tokenize(body, footnotes);
   const firstHeadingIndex = items.findIndex(item => item.kind === 'heading' && item.level === 1);
   const headingTitle = firstHeadingIndex >= 0
     ? (items[firstHeadingIndex] as HeadingItem).text
@@ -82,6 +84,13 @@ export function parseMarkdownWithMetadata(
     : documentType === 'official'
       ? createOfficialDocument(title, items, frontMatter)
       : createThesisDocument(title, items, frontMatter);
+
+  if (footnotes.size > 0) {
+    document.footnotes = [...footnotes.entries()].map(([id, source]) => {
+      const inline = parseInline(source);
+      return { id, text: inline.text, ...(inline.runs ? { runs: inline.runs } : {}) } as FootnoteDefinition;
+    });
+  }
 
   return { document, frontMatter };
 }
@@ -192,7 +201,7 @@ function parseFrontMatterValue(value: string): FrontMatterValue {
   return unquoted;
 }
 
-function tokenize(markdown: string): MarkdownItem[] {
+function tokenize(markdown: string, footnotes?: Map<string, string>): MarkdownItem[] {
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
   const items: MarkdownItem[] = [];
   let index = 0;
@@ -201,6 +210,15 @@ function tokenize(markdown: string): MarkdownItem[] {
     const line = lines[index];
     const trimmed = line.trim();
     if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    // `[^1]: text` defines a footnote. It is content, not the paragraph it
+    // looks like, and it has to leave the body before anything else reads it.
+    const definition = /^\[\^([^\]]+)\]:\s*(.*)$/.exec(trimmed);
+    if (definition) {
+      footnotes?.set(definition[1].trim(), definition[2].trim());
       index += 1;
       continue;
     }
@@ -905,6 +923,17 @@ function parseInline(source: string): { text: string; runs?: InlineRun[] } {
         }
       }
 
+      if (char === '[' && segment[index + 1] === '^') {
+        const end = segment.indexOf(']', index + 2);
+        const id = end > index + 2 ? segment.slice(index + 2, end).trim() : '';
+        if (id) {
+          flush();
+          runs.push({ text: '', ...format, footnoteRef: id });
+          index = end + 1;
+          continue;
+        }
+      }
+
       if (char === '[' || (char === '!' && segment[index + 1] === '[')) {
         const open = char === '!' ? index + 1 : index;
         const labelEnd = findLabelEnd(segment, open);
@@ -939,14 +968,14 @@ function parseInline(source: string): { text: string; runs?: InlineRun[] } {
 
   walk(source, 0, null, {});
 
-  const formatted = runs.some(run => run.bold || run.italic || run.underline || run.strike || run.code || run.href);
+  const formatted = runs.some(run => run.bold || run.italic || run.underline || run.strike || run.code || run.href || run.footnoteRef);
   if (!formatted) return { text };
 
   return {
     text,
     runs: runs
       .map(run => ({ ...run, text: cleanInline(run.text) }))
-      .filter(run => run.text.length > 0),
+      .filter(run => run.text.length > 0 || run.footnoteRef),
   };
 }
 

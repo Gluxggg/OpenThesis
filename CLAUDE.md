@@ -74,8 +74,10 @@ thesis build <manuscript.md> --type thesis -t <template.json> -o output.docx
 | Style role detection | Regex-based, fails on auto-numbered styles | V4: ML/layout-based |
 | Equation rendering | Native OMML covers core math plus common functions, limits, accents, delimiters and matrix environments | V3: custom macros, array specs and uncommon AMS environments |
 | Template parsing | Works best with real Word templates | Current: works for most templates |
-| Markdown inline styling | Bold, italic, strikethrough, inline code and links survive as runs; emphasis nested inside a captured span is flattened | Nested spans, and runs inside table cells |
+| Markdown inline styling | Bold, italic, strikethrough, inline code, links, nested emphasis and table-cell formatting all survive as runs | — |
 | Markdown dialect | Predictable manuscript subset | Expand only with compatibility tests |
+| Markdown footnotes | `[^1]` definitions become Word footnotes; a definition is one paragraph | Multi-paragraph footnotes |
+| Scanned PDFs | `parse` runs a locally installed OCRmyPDF, and says what to install when it is missing | Bundled OCR (tesseract.js) is not shipped |
 | Multi-section templates | The cover, front matter and body each get their own section; a template that changes its setup mid-chapter (landscape, a two-column passage) is still flattened into the part it falls in | Map a part to a page setup the content can name |
 | Document grid | The template snaps text to a 312-twip `w:docGrid`; the writer library emits its own `linePitch="360"` | Write `w:docGrid` in the post-pass |
 | Unsupported LaTeX | The Unicode fallback is lossy; `convertLatexToOmml` reports it, but the AST path has no diagnostic channel | Surface unsupported syntax on the rendered document |
