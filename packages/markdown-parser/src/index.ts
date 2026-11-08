@@ -288,14 +288,26 @@ function tokenize(markdown: string): MarkdownItem[] {
     }
 
     if (isTableStart(lines, index)) {
-      const headers = splitTableRow(lines[index]).map(cleanInline);
+      const headerCells = splitTableRow(lines[index]).map(cell => parseInline(cell));
+      const headers = headerCells.map(cell => cell.text);
       const data: string[][] = [];
+      const dataCells: Array<Array<{ text: string; runs?: InlineRun[] }>> = [];
       index += 2;
       while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
-        const row = splitTableRow(lines[index]).map(cleanInline);
-        data.push(headers.map((_, cellIndex) => row[cellIndex] ?? ''));
+        const row = splitTableRow(lines[index]).map(cell => parseInline(cell));
+        dataCells.push(headers.map((_, cellIndex) => row[cellIndex] ?? { text: '' }));
+        data.push(headers.map((_, cellIndex) => row[cellIndex]?.text ?? ''));
         index += 1;
       }
+      // A table cell used to keep only its text, so `**结果**` in a cell came
+      // out unstyled. The spans are carried beside the flat text, exactly as a
+      // paragraph's are.
+      const headerRuns = headerCells.some(cell => cell.runs)
+        ? headerCells.map(cell => cell.runs ?? [{ text: cell.text }])
+        : undefined;
+      const cellRuns = dataCells.some(row => row.some(cell => cell.runs))
+        ? dataCells.map(row => row.map(cell => cell.runs ?? [{ text: cell.text }]))
+        : undefined;
       // A caption line sits immediately above its table in most manuscripts.
       // GFM has no caption syntax, so that paragraph *is* the caption — it used
       // to be emitted as body text, which is why `表 3-1` came out 宋体 小四
@@ -308,7 +320,11 @@ function tokenize(markdown: string): MarkdownItem[] {
         caption = previous.block.text.replace(/^((?:表|图)\s*[\dA-Za-z][\d.\-–—]*)\s+/, '$1 ');
         items.pop();
       }
-      items.push({ kind: 'block', block: { type: 'table', caption, headers, data } });
+      items.push({ kind: 'block', block: {
+        type: 'table', caption, headers, data,
+        ...(headerRuns ? { headerRuns } : {}),
+        ...(cellRuns ? { cellRuns } : {}),
+      } });
       continue;
     }
 
@@ -794,44 +810,136 @@ function cleanInline(text: string): string {
     .trim();
 }
 
-/**
- * Inline Markdown, in precedence order: bold before italic, link before its
- * bare URL. Each alternative fills a different capture group; the last is an
- * autolink (`<https://…>`), which `cleanInline` already flattened to its URL.
- */
-const INLINE_PATTERN =
-  /(\*\*|__)(\S[\s\S]*?\S)\1|(?<!\w)_(\S[\s\S]*?\S)_(?!\w)|\*(\S[\s\S]*?\S)\*|~~(\S[\s\S]*?\S)~~|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)|<((?:https?|mailto):[^>\s]+)>/g;
+interface InlineFormat {
+  bold?: boolean;
+  italic?: boolean;
+  strike?: boolean;
+  code?: boolean;
+  href?: string;
+}
+
+interface InlineDelimiter {
+  token: string;
+  format: InlineFormat;
+  /** Underscore emphasis does not apply inside a word (`my_file_name`). */
+  intraword: boolean;
+}
+
+const INLINE_DELIMITERS: InlineDelimiter[] = [
+  { token: '**', format: { bold: true }, intraword: true },
+  { token: '__', format: { bold: true }, intraword: false },
+  { token: '~~', format: { strike: true }, intraword: true },
+  { token: '*', format: { italic: true }, intraword: true },
+  { token: '_', format: { italic: true }, intraword: false },
+];
 
 /**
  * Split one inline source into formatted spans.
  *
- * The flattened `text` stays the contract every consumer already reads; `runs`
- * only appears when something was actually formatted, so ordinary prose keeps
- * the plain path. Bold, italic, strikethrough, inline code, links and autolinks
- * are what a manuscript is likely to write; nested emphasis is flattened.
+ * A delimiter opens only when text follows it and closes only when text
+ * precedes it, and the span is parsed recursively, so `**a *b* c**` keeps both
+ * weights instead of flattening one of them. `code` stays literal, a link lends
+ * its target to the spans inside it, and anything unmatched is left as written.
+ *
+ * The flattened `text` remains the contract every text-only consumer reads;
+ * `runs` only appears when something was actually formatted.
  */
 function parseInline(source: string): { text: string; runs?: InlineRun[] } {
   const text = cleanInline(source);
-  const pattern = new RegExp(INLINE_PATTERN.source, 'g');
   const runs: InlineRun[] = [];
-  let formatted = false;
-  let last = 0;
-  let match: RegExpExecArray | null;
 
-  while ((match = pattern.exec(source)) !== null) {
-    if (match.index > last) runs.push({ text: source.slice(last, match.index) });
-    let run: InlineRun;
-    if (match[2] !== undefined) { run = { text: match[2], bold: true }; formatted = true; }
-    else if (match[3] !== undefined) { run = { text: match[3], italic: true }; formatted = true; }
-    else if (match[4] !== undefined) { run = { text: match[4], italic: true }; formatted = true; }
-    else if (match[5] !== undefined) { run = { text: match[5], strike: true }; formatted = true; }
-    else if (match[6] !== undefined) { run = { text: match[6], code: true }; formatted = true; }
-    else if (match[7] !== undefined) { run = { text: match[7], href: match[8] }; formatted = true; }
-    else { run = { text: match[9], href: match[9] }; formatted = true; }
-    runs.push(run);
-    last = match.index + match[0].length;
-  }
-  if (last < source.length) runs.push({ text: source.slice(last) });
+  const append = (run: InlineRun) => {
+    if (run.text.length > 0) runs.push(run);
+  };
+
+  const walk = (
+    segment: string,
+    start: number,
+    stop: InlineDelimiter | null,
+    format: InlineFormat,
+  ): { next: number; closed: boolean } => {
+    let index = start;
+    let buffer = '';
+    const flush = () => {
+      if (buffer) {
+        append({ text: buffer, ...format });
+        buffer = '';
+      }
+    };
+
+    while (index < segment.length) {
+      if (stop && segment.startsWith(stop.token, index) && closesHere(segment, index, stop)) {
+        flush();
+        return { next: index + stop.token.length, closed: true };
+      }
+
+      const char = segment[index];
+      if (char === '\\' && index + 1 < segment.length) {
+        buffer += segment[index + 1];
+        index += 2;
+        continue;
+      }
+
+      if (char === '`') {
+        const end = segment.indexOf('`', index + 1);
+        if (end > index + 1) {
+          flush();
+          runs.push({ text: segment.slice(index + 1, end), ...format, code: true });
+          index = end + 1;
+          continue;
+        }
+      }
+
+      if (char === '<') {
+        const autolink = /^<((?:https?|mailto):[^>\s]+)>/.exec(segment.slice(index));
+        if (autolink) {
+          flush();
+          runs.push({ text: autolink[1], ...format, href: autolink[1] });
+          index += autolink[0].length;
+          continue;
+        }
+        const tag = /^<\/?[A-Za-z][^>]*>/.exec(segment.slice(index));
+        if (tag) {
+          index += tag[0].length;
+          continue;
+        }
+      }
+
+      if (char === '[' || (char === '!' && segment[index + 1] === '[')) {
+        const open = char === '!' ? index + 1 : index;
+        const labelEnd = findLabelEnd(segment, open);
+        const target = labelEnd >= 0 ? linkTarget(segment, labelEnd) : null;
+        if (labelEnd >= 0 && target) {
+          flush();
+          walk(segment.slice(open + 1, labelEnd), 0, null, { ...format, href: target.href });
+          index = target.next;
+          continue;
+        }
+      }
+
+      const opener = matchDelimiter(segment, index);
+      if (opener) {
+        flush();
+        const mark = runs.length;
+        const inner = walk(segment, index + opener.token.length, opener, { ...format, ...opener.format });
+        if (inner.closed) {
+          index = inner.next;
+          continue;
+        }
+        runs.length = mark;
+      }
+
+      buffer += char;
+      index += 1;
+    }
+
+    flush();
+    return { next: index, closed: false };
+  };
+
+  walk(source, 0, null, {});
+
+  const formatted = runs.some(run => run.bold || run.italic || run.underline || run.strike || run.code || run.href);
   if (!formatted) return { text };
 
   return {
@@ -840,6 +948,49 @@ function parseInline(source: string): { text: string; runs?: InlineRun[] } {
       .map(run => ({ ...run, text: cleanInline(run.text) }))
       .filter(run => run.text.length > 0),
   };
+}
+
+function matchDelimiter(segment: string, index: number): InlineDelimiter | null {
+  for (const delimiter of INLINE_DELIMITERS) {
+    if (!segment.startsWith(delimiter.token, index)) continue;
+    // `**` must win over `*`: a single-char delimiter that is really the first
+    // half of a longer one is not an opener.
+    if (delimiter.token.length === 1 && segment[index + 1] === delimiter.token) continue;
+    const next = segment[index + delimiter.token.length];
+    if (next === undefined || /\s/.test(next)) continue;
+    if (!delimiter.intraword && index > 0 && /\w/.test(segment[index - 1])) continue;
+    return delimiter;
+  }
+  return null;
+}
+
+function closesHere(segment: string, index: number, delimiter: InlineDelimiter): boolean {
+  // Likewise, the first `*` of a `**` does not close a single-char span.
+  if (delimiter.token.length === 1 && segment[index + 1] === delimiter.token) return false;
+  const previous = segment[index - 1];
+  if (previous === undefined || /\s/.test(previous)) return false;
+  if (!delimiter.intraword && /\w/.test(segment[index + delimiter.token.length] ?? '')) return false;
+  return true;
+}
+
+function findLabelEnd(segment: string, open: number): number {
+  for (let index = open + 1; index < segment.length; index += 1) {
+    if (segment[index] === '\\') {
+      index += 1;
+      continue;
+    }
+    if (segment[index] === ']') return index;
+  }
+  return -1;
+}
+
+function linkTarget(segment: string, labelEnd: number): { href: string; next: number } | null {
+  if (segment[labelEnd + 1] !== '(') return null;
+  const close = segment.indexOf(')', labelEnd + 2);
+  if (close < 0) return null;
+  const href = segment.slice(labelEnd + 2, close).trim().split(/\s+/)[0];
+  if (!href) return null;
+  return { href, next: close + 1 };
 }
 
 function joinSoftLines(lines: string[]): string {

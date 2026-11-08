@@ -1129,8 +1129,11 @@ function renderTable(
   const headerless = block.headers.every(header => !header || !header.trim());
   const headerRow = new TableRow({
     tableHeader: true,
-    children: block.headers.map((h, ci) =>
-      new TableCell({
+    children: block.headers.map((h, ci) => {
+      // A header cell keeps its own spans: `**结果**` in a Markdown table used
+      // to reach the renderer as plain text.
+      const runs = block.headerRuns?.[ci];
+      return new TableCell({
         width: { size: colWidths[ci], type: WidthType.DXA },
         // Only the horizontal rules live on the cell: a vertical rule declared
         // here paints over the black rule at the column join, which is what put
@@ -1148,12 +1151,19 @@ function renderTable(
           : undefined,
         children: [
           new Paragraph({
-            children: styledRuns(
-              h,
-              headerStyle,
-              template.tableFormat?.headerBold ?? true,
-              template.tableFormat?.headerSize,
-            ),
+            children: runs
+              ? inlineRunChildren(
+                  runs,
+                  headerStyle,
+                  template.tableFormat?.headerBold ?? true,
+                  template.tableFormat?.headerSize,
+                )
+              : styledRuns(
+                  h,
+                  headerStyle,
+                  template.tableFormat?.headerBold ?? true,
+                  template.tableFormat?.headerSize,
+                ),
             alignment: mapAlignment(headerStyle.paragraph.alignment),
             // `lineStyle` carries the template's `lineRule`. Passing `line`
             // alone dropped it, so an `exact` twips value was read as a multiple
@@ -1166,8 +1176,8 @@ function renderTable(
             },
           }),
         ],
-      }),
-    ),
+      });
+    }),
   });
 
   // Data rows
@@ -1182,8 +1192,9 @@ function renderTable(
     }
     const isLast = ri === block.data.length - 1;
     return new TableRow({
-      children: block.headers.map((_, ci) =>
-        new TableCell({
+      children: block.headers.map((_, ci) => {
+        const runs = block.cellRuns?.[ri]?.[ci];
+        return new TableCell({
           width: { size: colWidths[ci], type: WidthType.DXA },
           // Horizontal only, for the same reason as the header row.
           borders: {
@@ -1192,7 +1203,9 @@ function renderTable(
           },
           children: [
             new Paragraph({
-              children: styledRuns(row[ci] ?? '', bodyStyle),
+              children: runs
+                ? inlineRunChildren(runs, bodyStyle)
+                : styledRuns(row[ci] ?? '', bodyStyle),
               alignment: mapAlignment(bodyStyle.paragraph.alignment),
               // Same as the header row: keep the template's rule and its
               // 段前/段后, and only fall back to the old tight values when the
@@ -1204,8 +1217,8 @@ function renderTable(
               },
             }),
           ],
-        }),
-      ),
+        });
+      }),
     });
   });
 

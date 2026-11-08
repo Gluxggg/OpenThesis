@@ -412,8 +412,12 @@ function validateInlineRuns(value: Record<string, unknown>, path: string, report
     report(`${path}.runs`, `must be an array of runs, received ${describe(runs)}`);
     return;
   }
+  validateRunList(runs, `${path}.runs`, report);
+}
+
+function validateRunList(runs: unknown[], path: string, report: Report): void {
   runs.forEach((run, index) => {
-    const runPath = `${path}.runs[${index}]`;
+    const runPath = `${path}[${index}]`;
     if (!isObject(run)) {
       report(runPath, `expected a run object, received ${describe(run)}`);
       return;
@@ -431,6 +435,43 @@ function validateInlineRuns(value: Record<string, unknown>, path: string, report
     if (run.href !== undefined && !isNonEmptyString(run.href)) {
       report(`${runPath}.href`, `must be a non-empty string when given, received ${describe(run.href)}`);
     }
+  });
+}
+
+/**
+ * Validate the cells of one row of runs — `headerRuns` is a single row whose
+ * length is the column count.
+ */
+function validateRunRow(value: unknown, path: string, columns: number, report: Report): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    report(path, `must be an array of cells, received ${describe(value)}`);
+    return;
+  }
+  if (value.length !== columns) {
+    report(path, `has ${value.length} cell${value.length === 1 ? '' : 's'} but the table declares ${columns} column${columns === 1 ? '' : 's'}`);
+  }
+  value.forEach((cell, cellIndex) => {
+    if (!Array.isArray(cell)) {
+      report(`${path}[${cellIndex}]`, `expected an array of runs, received ${describe(cell)}`);
+      return;
+    }
+    validateRunList(cell, `${path}[${cellIndex}]`, report);
+  });
+}
+
+/** Validate a grid of run arrays: one row per data row. */
+function validateRunGrid(value: unknown, path: string, rows: number, columns: number, report: Report): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    report(path, `must be an array of rows, received ${describe(value)}`);
+    return;
+  }
+  if (value.length !== rows) {
+    report(path, `has ${value.length} row${value.length === 1 ? '' : 's'} but the table declares ${rows}`);
+  }
+  value.forEach((row, rowIndex) => {
+    validateRunRow(row, `${path}[${rowIndex}]`, columns, report);
   });
 }
 
@@ -587,6 +628,10 @@ function validateTable(value: Record<string, unknown>, path: string, report: Rep
       });
     });
   }
+
+  const rowCount = Array.isArray(data) ? data.length : 0;
+  validateRunRow(value.headerRuns, `${path}.headerRuns`, headers.length, report);
+  validateRunGrid(value.cellRuns, `${path}.cellRuns`, rowCount, headers.length, report);
 
   const columnWidths = value.columnWidths;
   if (columnWidths !== undefined) {

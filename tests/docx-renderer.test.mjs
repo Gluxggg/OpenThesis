@@ -163,6 +163,42 @@ test('renders inline runs as bold, italic, code and a hyperlink', async () => {
   assert.match(xml, /<w:rFonts w:ascii="Courier New"/);
 });
 
+test('renders formatted runs inside table cells', async () => {
+  // A Markdown table cell used to flatten to plain text before the renderer
+  // saw it; `headerRuns`/`cellRuns` carry its spans like a paragraph's runs.
+  const buffer = await renderDocument({
+    outputPath: '',
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Cell runs' }, cover: [],
+      sections: [{
+        id: 'cells', type: 'chapter', title: 'Cells',
+        content: [{
+          type: 'table',
+          caption: '表1 单元格格式',
+          headers: ['粗体表头', '普通'],
+          data: [['斜体单元格', '普通']],
+          headerRuns: [
+            [{ text: '粗体表头', bold: true }],
+            [{ text: '普通' }],
+          ],
+          cellRuns: [
+            [
+              [{ text: '斜体单元格', italic: true }],
+              [{ text: '普通' }],
+            ],
+          ],
+        }],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.match(xml, /<w:b\/>/);
+  assert.match(xml, /<w:i\/>/);
+  assert.match(xml, /粗体表头/);
+  assert.match(xml, /斜体单元格/);
+});
+
 test('rejects tables without header columns', async () => {
   await assert.rejects(() => renderDocument({
     outputPath: '',

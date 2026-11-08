@@ -190,6 +190,50 @@ test('keeps inline formatting in list items and quotes too', () => {
   assert.deepEqual(quote?.runs, [{ text: '引用的斜体', italic: true }]);
 });
 
+test('nested emphasis keeps both weights instead of flattening one', () => {
+  const [boldAroundItalic] = parseMarkdownBlocks('**加粗里带*斜体*效果**');
+  assert.equal(boldAroundItalic.text, '加粗里带斜体效果');
+  assert.deepEqual(boldAroundItalic.runs, [
+    { text: '加粗里带', bold: true },
+    { text: '斜体', bold: true, italic: true },
+    { text: '效果', bold: true },
+  ]);
+
+  const [italicAroundBold] = parseMarkdownBlocks('*斜体里带**加粗**效果*');
+  assert.deepEqual(italicAroundBold.runs, [
+    { text: '斜体里带', italic: true },
+    { text: '加粗', italic: true, bold: true },
+    { text: '效果', italic: true },
+  ]);
+
+  // A link lends its target to the emphasis inside it.
+  const [linkWithBold] = parseMarkdownBlocks('[**重点**链接](https://example.com)');
+  assert.deepEqual(linkWithBold.runs, [
+    { text: '重点', bold: true, href: 'https://example.com' },
+    { text: '链接', href: 'https://example.com' },
+  ]);
+});
+
+test('keeps a Markdown table cell’s formatting as runs', () => {
+  const blocks = parseMarkdownBlocks([
+    '| **表头粗** | 普通 |',
+    '| --- | --- |',
+    '| *单元格斜体* | `code` |',
+  ].join('\n'));
+  const table = blocks.find(block => block.type === 'table');
+  assert.deepEqual(table?.headers, ['表头粗', '普通']);
+  assert.deepEqual(table?.headerRuns, [
+    [{ text: '表头粗', bold: true }],
+    [{ text: '普通' }],
+  ]);
+  assert.deepEqual(table?.cellRuns, [
+    [
+      [{ text: '单元格斜体', italic: true }],
+      [{ text: 'code', code: true }],
+    ],
+  ]);
+});
+
 test('keeps a trailing hash that is not a closing sequence', () => {
   // CommonMark needs a space before the closing `#` run, so `# C#` keeps it.
   assert.equal(parseMarkdown('# C#\n\nbody').meta.title, 'C#');

@@ -492,6 +492,16 @@ export interface FigureBlock extends BaseBlock {
 export interface TableBlock extends BaseBlock {
   type: 'table';
   caption: string; headers: string[]; data: string[][];
+  /**
+   * The header cells' inline spans, when a cell carried formatting.
+   *
+   * `headers`/`data` stay the flat text every consumer reads; these two carry
+   * what a Markdown table cell loses when it is flattened — `**bold**`,
+   * `*italic*`, inline code and links inside a cell.
+   */
+  headerRuns?: InlineRun[][];
+  /** The body cells' spans, indexed [row][column], same shape as `data`. */
+  cellRuns?: InlineRun[][][];
   number?: string; columnWidths?: number[];
   showGridlines?: boolean; headerShading?: boolean;
 }
