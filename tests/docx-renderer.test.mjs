@@ -102,6 +102,29 @@ test('renders the CC label exactly once in official documents', async () => {
   assert.doesNotMatch(xml, /抄送：抄送：/);
 });
 
+test('a 主送机关 written in the body is not repeated by the one built from meta', async () => {
+  // `meta.primaryRecipients` generates one; a document that also writes the
+  // line as a body block got it twice — which is what `thesis init --type
+  // official` produced.
+  const buffer = await renderDocument({
+    outputPath: '',
+    template,
+    document: {
+      type: 'official',
+      meta: {
+        title: '测试通知', issuingAuthority: '测试机关', documentNumber: '测〔2026〕1号',
+        documentCategory: '通知', primaryRecipients: ['主送单位'], date: '2026年8月30日',
+      },
+      body: [
+        { type: 'recipient_line', text: '主送单位：', recipientType: 'primary' },
+        { type: 'paragraph', text: '正文。' },
+      ],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.equal((xml.match(/主送单位：/g) ?? []).length, 1);
+});
+
 test('rejects tables without header columns', async () => {
   await assert.rejects(() => renderDocument({
     outputPath: '',

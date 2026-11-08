@@ -2636,7 +2636,12 @@ function renderOfficialDocument(
   );
 
   // Recipients
-  if (doc.meta.primaryRecipients && doc.meta.primaryRecipients.length > 0) {
+  // A document may write its own 主送机关 as a body block; generating one from
+  // `meta.primaryRecipients` on top of that printed the line twice.
+  const writesOwnRecipients = doc.body.some(
+    block => block.type === 'recipient_line' && block.recipientType === 'primary'
+  );
+  if (!writesOwnRecipients && doc.meta.primaryRecipients && doc.meta.primaryRecipients.length > 0) {
     children.push(
       renderRecipientLine({
         type: 'recipient_line',
