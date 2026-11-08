@@ -145,15 +145,49 @@ test('leaves ordinary punctuation alone while still stripping real emphasis', ()
   assert.deepEqual(parseMarkdownBlocks('if a < b > c then'), [
     { type: 'paragraph', text: 'if a < b > c then' },
   ]);
-  assert.deepEqual(parseMarkdownBlocks('see <https://example.com/x> here'), [
-    { type: 'paragraph', text: 'see https://example.com/x here' },
+  // Emphasis and autolinks now survive as runs; the flattened text is unchanged.
+  assert.deepEqual(parseMarkdownBlocks('see <https://example.com/x> here').map(block => block.text), [
+    'see https://example.com/x here',
   ]);
-  assert.deepEqual(parseMarkdownBlocks('this is *italic* and **bold**'), [
-    { type: 'paragraph', text: 'this is italic and bold' },
+  assert.deepEqual(parseMarkdownBlocks('this is *italic* and **bold**').map(block => block.text), [
+    'this is italic and bold',
   ]);
-  assert.deepEqual(parseMarkdownBlocks('an _emphasised_ word'), [
-    { type: 'paragraph', text: 'an emphasised word' },
+  assert.deepEqual(parseMarkdownBlocks('an _emphasised_ word').map(block => block.text), [
+    'an emphasised word',
   ]);
+});
+
+test('keeps inline formatting as runs instead of flattening it away', () => {
+  const [paragraph] = parseMarkdownBlocks(
+    '这是**加粗**、*斜体*、`代码`、~~删除~~和[链接](https://example.com)。',
+  );
+  // The flattened text is still what every text-only consumer reads.
+  assert.equal(paragraph.text, '这是加粗、斜体、代码、删除和链接。');
+  assert.deepEqual(paragraph.runs, [
+    { text: '这是' },
+    { text: '加粗', bold: true },
+    { text: '、' },
+    { text: '斜体', italic: true },
+    { text: '、' },
+    { text: '代码', code: true },
+    { text: '、' },
+    { text: '删除', strike: true },
+    { text: '和' },
+    { text: '链接', href: 'https://example.com' },
+    { text: '。' },
+  ]);
+});
+
+test('keeps inline formatting in list items and quotes too', () => {
+  const blocks = parseMarkdownBlocks([
+    '- **粗体**条目',
+    '',
+    '> *引用的斜体*',
+  ].join('\n'));
+  const list = blocks.find(block => block.type === 'list_item');
+  const quote = blocks.find(block => block.type === 'blockquote');
+  assert.deepEqual(list?.runs, [{ text: '粗体', bold: true }, { text: '条目' }]);
+  assert.deepEqual(quote?.runs, [{ text: '引用的斜体', italic: true }]);
 });
 
 test('keeps a trailing hash that is not a closing sequence', () => {

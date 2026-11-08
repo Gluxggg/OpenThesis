@@ -125,6 +125,44 @@ test('a 主送机关 written in the body is not repeated by the one built from m
   assert.equal((xml.match(/主送单位：/g) ?? []).length, 1);
 });
 
+test('renders inline runs as bold, italic, code and a hyperlink', async () => {
+  // The parser keeps Markdown's formatting as runs; before this the renderer
+  // only ever saw `text`, so `**bold**` came out as bold-less body text and a
+  // link lost its target.
+  const buffer = await renderDocument({
+    outputPath: '',
+    template,
+    document: {
+      type: 'thesis', meta: { title: 'Inline runs' }, cover: [],
+      sections: [{
+        id: 'inline', type: 'chapter', title: 'Inline',
+        content: [{
+          type: 'paragraph',
+          text: 'plain bold italic code link',
+          runs: [
+            { text: 'plain ' },
+            { text: 'bold', bold: true },
+            { text: ' ' },
+            { text: 'italic', italic: true },
+            { text: ' ' },
+            { text: 'code', code: true },
+            { text: ' ' },
+            { text: 'link', href: 'https://example.com/x' },
+          ],
+        }],
+      }],
+    },
+  });
+  const { zip, xml } = await documentXml(buffer);
+  assert.match(xml, /<w:b\/>/);
+  assert.match(xml, /<w:i\/>/);
+  assert.match(xml, /w:hyperlink/);
+  const rels = await zip.file('word/_rels/document.xml.rels').async('string');
+  assert.match(rels, /https:\/\/example\.com\/x/);
+  // The monospace face is only applied to the inline code run's Latin side.
+  assert.match(xml, /<w:rFonts w:ascii="Courier New"/);
+});
+
 test('rejects tables without header columns', async () => {
   await assert.rejects(() => renderDocument({
     outputPath: '',

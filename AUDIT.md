@@ -1214,3 +1214,52 @@ keeps the font mapping covered; four synthetic-PDF tests cover weights, the text
 column, the running head, and the TOC guard.
 
 `pnpm check`: 230 tests, all passing.
+
+---
+
+## 27. Markdown emphasis was being thrown away
+
+`**bold**`, `*italic*`, `` `code` ``, `~~struck~~` and `[label](url)` are what a
+manuscript in Markdown is made of. The parser ran every line through
+`cleanInline`, which strips the markers and keeps the words, and the paragraph
+schema had a single `text` field — so the rendered DOCX contained no `w:b`, no
+`w:i`, and no hyperlink relationship at all. A reference to a URL printed its
+label and lost the URL.
+
+### What a run is now
+
+`InlineRun` carries `text` plus `bold`, `italic`, `underline`, `strike`, `code`
+and `href`. Paragraph, heading, list-item, blockquote and centered-text blocks
+accept an optional `runs` array; a block without one renders exactly as it did
+before, and `text` stays the flattened fallback every existing consumer reads.
+
+The parser fills it from one precedence-ordered pattern (bold before italic,
+link before its bare URL), and the renderer turns each span into a `TextRun`
+with its own flags, an `ExternalHyperlink` for `href`, and `Courier New` on the
+Latin side of a `code` span. A span that still contains `$…$` or `[[表3-1]]` goes
+through the existing `styledRuns` path, so OMML and REF fields keep working.
+
+### Verified
+
+A Markdown manuscript with all five constructs built through the CLI produced a
+DOCX whose `document.xml` carries `<w:b/>`, `<w:i/>`, `w:hyperlink` and a
+monospace `w:rFonts`, and whose `document.xml.rels` carries the link target.
+Tests 231 -> 234.
+
+## 28. The two blank pages are Word's, and the real template has them too
+
+A generated thesis rendered through Word came out as 7 pages with a blank page 2
+and a blank page 4. The same blank pages appear in the export of the **real**
+`《北京科技大学硕士学位论文模板》.docx` (pages 4 and 12), and Word's own object
+model reproduces them when a document enables either Mirror margins or Different
+odd and even and a section restarts page numbering: Word puts a restarted section
+on an odd (recto) page, inserting a blank one when needed. The export of a
+document built without either setting has no blank pages; so does dropping
+`w:pgNumType@w:start`.
+
+That makes the blank pages a property of the template's double-sided setup
+rather than a defect in the generator — the number the guide asks for (摘要 from
+I, body from 1) requires the restart that Word aligns. Nothing was changed for
+this; it is recorded here so the next report does not re-open it.
+
+`pnpm check`: 234 tests, all passing.

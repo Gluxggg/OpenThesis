@@ -159,6 +159,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 - ✅ **Real Word lists** — Auto-numbered bullets and numbering via OOXML, with each list restarting its own counter
 - ✅ **Lists, code blocks, and blockquotes** — Native paragraph rendering with borders and indents
 - ✅ **Markdown import** — Front matter (scalars, flow sequences, block sequences), nested sections, lists, tables, figures, code, quotes, and display equations
+- ✅ **Inline formatting** — `**bold**`, `*italic*`, `` `code` ``, `~~strikethrough~~` and `[links](url)` become real Word runs and hyperlink relationships instead of being flattened to plain text
 - ✅ **Direct Markdown builds** — `.md` → `.docx` without an intermediate file
 - ✅ **Agent-ready Skill** — Standard `SKILL.md`, executable wrapper, UI metadata, and progressive references
 - ✅ **Native Office Math core** — Fractions, roots, scripts, sums, integrals, symbols, and Greek letters emit OMML

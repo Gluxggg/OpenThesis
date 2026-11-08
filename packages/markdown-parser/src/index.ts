@@ -1,6 +1,7 @@
 import type {
   ContentBlock,
   DocumentType,
+  InlineRun,
   JournalArticle,
   JournalAuthor,
   JournalSection,
@@ -29,6 +30,8 @@ interface HeadingItem {
   kind: 'heading';
   level: number;
   text: string;
+  /** Inline formatting spans, when the heading carried any. */
+  runs?: InlineRun[];
 }
 
 interface BlockItem {
@@ -89,6 +92,7 @@ export function parseMarkdownBlocks(markdown: string): ContentBlock[] {
     ? ({
         type: `heading${Math.min(item.level, 4)}`,
         text: item.text,
+        ...(item.runs ? { runs: item.runs } : {}),
       } as ContentBlock)
     : item.block);
 }
@@ -205,7 +209,8 @@ function tokenize(markdown: string): MarkdownItem[] {
     // space separates it from the text, so `# C#` keeps its `#`.
     const heading = /^ {0,3}(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
     if (heading) {
-      items.push({ kind: 'heading', level: heading[1].length, text: cleanInline(heading[2]) });
+      const inline = parseInline(heading[2]);
+      items.push({ kind: 'heading', level: heading[1].length, ...inline });
       index += 1;
       continue;
     }
@@ -252,7 +257,7 @@ function tokenize(markdown: string): MarkdownItem[] {
       // follows, not part of the equation.
       const trailing = displayMath[2].trim();
       if (trailing) {
-        items.push({ kind: 'block', block: { type: 'paragraph', text: cleanInline(trailing) } });
+        items.push({ kind: 'block', block: { type: 'paragraph', ...parseInline(trailing) } });
       }
       index += 1;
       continue;
@@ -313,7 +318,7 @@ function tokenize(markdown: string): MarkdownItem[] {
         quote.push(lines[index].replace(/^\s*>\s?/, ''));
         index += 1;
       }
-      items.push({ kind: 'block', block: { type: 'blockquote', text: cleanInline(joinSoftLines(quote)) } });
+      items.push({ kind: 'block', block: { type: 'blockquote', ...parseInline(joinSoftLines(quote)) } });
       continue;
     }
 
@@ -340,7 +345,7 @@ function tokenize(markdown: string): MarkdownItem[] {
           kind: 'block',
           block: {
             type: 'list_item',
-            text: cleanInline(item[3]),
+            ...parseInline(item[3]),
             level: openIndents.length - 1,
             ordered: /^\d/.test(item[2]),
             marker: item[2],
@@ -360,7 +365,7 @@ function tokenize(markdown: string): MarkdownItem[] {
       paragraph.push(trimmed);
       index += 1;
     }
-    items.push({ kind: 'block', block: { type: 'paragraph', text: cleanInline(joinSoftLines(paragraph)) } });
+    items.push({ kind: 'block', block: { type: 'paragraph', ...parseInline(joinSoftLines(paragraph)) } });
   }
 
   attachCaptionLines(items);
@@ -573,7 +578,7 @@ function createOfficialDocument(
   }
   const documentCategory = (categoryValue as OfficialDocCategory | undefined) ?? '通知';
   const body = items.map(item => item.kind === 'heading'
-    ? ({ type: `heading${Math.min(item.level, 4)}`, text: item.text } as ContentBlock)
+    ? ({ type: `heading${Math.min(item.level, 4)}`, text: item.text, ...(item.runs ? { runs: item.runs } : {}) } as ContentBlock)
     : item.block);
 
   return {
@@ -787,6 +792,54 @@ function cleanInline(text: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .trim();
+}
+
+/**
+ * Inline Markdown, in precedence order: bold before italic, link before its
+ * bare URL. Each alternative fills a different capture group; the last is an
+ * autolink (`<https://…>`), which `cleanInline` already flattened to its URL.
+ */
+const INLINE_PATTERN =
+  /(\*\*|__)(\S[\s\S]*?\S)\1|(?<!\w)_(\S[\s\S]*?\S)_(?!\w)|\*(\S[\s\S]*?\S)\*|~~(\S[\s\S]*?\S)~~|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)|<((?:https?|mailto):[^>\s]+)>/g;
+
+/**
+ * Split one inline source into formatted spans.
+ *
+ * The flattened `text` stays the contract every consumer already reads; `runs`
+ * only appears when something was actually formatted, so ordinary prose keeps
+ * the plain path. Bold, italic, strikethrough, inline code, links and autolinks
+ * are what a manuscript is likely to write; nested emphasis is flattened.
+ */
+function parseInline(source: string): { text: string; runs?: InlineRun[] } {
+  const text = cleanInline(source);
+  const pattern = new RegExp(INLINE_PATTERN.source, 'g');
+  const runs: InlineRun[] = [];
+  let formatted = false;
+  let last = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(source)) !== null) {
+    if (match.index > last) runs.push({ text: source.slice(last, match.index) });
+    let run: InlineRun;
+    if (match[2] !== undefined) { run = { text: match[2], bold: true }; formatted = true; }
+    else if (match[3] !== undefined) { run = { text: match[3], italic: true }; formatted = true; }
+    else if (match[4] !== undefined) { run = { text: match[4], italic: true }; formatted = true; }
+    else if (match[5] !== undefined) { run = { text: match[5], strike: true }; formatted = true; }
+    else if (match[6] !== undefined) { run = { text: match[6], code: true }; formatted = true; }
+    else if (match[7] !== undefined) { run = { text: match[7], href: match[8] }; formatted = true; }
+    else { run = { text: match[9], href: match[9] }; formatted = true; }
+    runs.push(run);
+    last = match.index + match[0].length;
+  }
+  if (last < source.length) runs.push({ text: source.slice(last) });
+  if (!formatted) return { text };
+
+  return {
+    text,
+    runs: runs
+      .map(run => ({ ...run, text: cleanInline(run.text) }))
+      .filter(run => run.text.length > 0),
+  };
 }
 
 function joinSoftLines(lines: string[]): string {

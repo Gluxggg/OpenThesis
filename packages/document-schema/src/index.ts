@@ -389,9 +389,32 @@ export type StyleRole = BlockType
   | 'thesis_abstract' | 'thesis_keywords'
   | 'thesis_abstract_en' | 'thesis_keywords_en';
 
+/**
+ * One span of a paragraph's text that carries its own formatting.
+ *
+ * Markdown writes `**bold**`, `*italic*`, `` `code` ``, `~~struck~~` and
+ * `[label](url)`. A paragraph used to keep only its flattened `text`, so the
+ * parser stripped the markers and the renderer had nothing left to apply —
+ * emphasis and links disappeared from the DOCX. `runs` keeps what `text`
+ * flattens, and a block without `runs` renders exactly as it always did.
+ */
+export interface InlineRun {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  /** Inline code: set in the monospace face instead of the body face. */
+  code?: boolean;
+  /** The target of `[label](url)`; renders as a real Word hyperlink. */
+  href?: string;
+}
+
 export interface HeadingBlock extends BaseBlock {
   type: 'heading1' | 'heading2' | 'heading3' | 'heading4';
   text: string; number?: string;
+  /** Inline formatting spans, when the source carried any. */
+  runs?: InlineRun[];
   /**
    * Render this heading with another role's style.
    *
@@ -405,11 +428,15 @@ export interface HeadingBlock extends BaseBlock {
 export interface ParagraphBlock extends BaseBlock {
   type: 'paragraph' | 'paragraph_no_indent';
   text: string;
+  /** Inline formatting spans, when the source carried any. */
+  runs?: InlineRun[];
 }
 
 export interface CenteredTextBlock extends BaseBlock {
   type: 'centered_text';
   text: string; font_size_pt?: number; bold?: boolean;
+  /** Inline formatting spans, when the source carried any. */
+  runs?: InlineRun[];
   /**
    * Use the template's style for this line instead of the block-level defaults.
    *
@@ -472,6 +499,8 @@ export interface TableBlock extends BaseBlock {
 export interface ListItemBlock extends BaseBlock {
   type: 'list_item';
   text: string; level?: number; ordered?: boolean; marker?: string;
+  /** Inline formatting spans, when the source carried any. */
+  runs?: InlineRun[];
 }
 
 export interface CodeBlockBlock extends BaseBlock {
@@ -480,6 +509,8 @@ export interface CodeBlockBlock extends BaseBlock {
 
 export interface BlockquoteBlock extends BaseBlock {
   type: 'blockquote'; text: string;
+  /** Inline formatting spans, when the source carried any. */
+  runs?: InlineRun[];
 }
 
 export interface SpacerBlock extends BaseBlock {

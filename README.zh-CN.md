@@ -137,6 +137,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 
 - ✅ 解析并递归合并 DOCX 样式继承关系
 - ✅ 将文本型 PDF 的字体族、字重、正文字栏和页面几何信息推断为可复用模板（启发式，见上方 PDF 支持说明）
+- ✅ Markdown 行内格式（加粗、斜体、行内代码、删除线、超链接）保留为 Word 富文本 run 与超链接关系，而不是被压成纯文本
 - ✅ 根据样式名称和大纲级别识别标题、摘要等语义角色
 - ✅ 提取页面尺寸、页边距和分栏设置
 - ✅ 表格边框、底纹和列宽控制

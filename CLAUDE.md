@@ -74,7 +74,7 @@ thesis build <manuscript.md> --type thesis -t <template.json> -o output.docx
 | Style role detection | Regex-based, fails on auto-numbered styles | V4: ML/layout-based |
 | Equation rendering | Native OMML covers core math plus common functions, limits, accents, delimiters and matrix environments | V3: custom macros, array specs and uncommon AMS environments |
 | Template parsing | Works best with real Word templates | Current: works for most templates |
-| Markdown inline styling | Paragraph schema stores plain text | Future: rich inline ranges |
+| Markdown inline styling | Bold, italic, strikethrough, inline code and links survive as runs; emphasis nested inside a captured span is flattened | Nested spans, and runs inside table cells |
 | Markdown dialect | Predictable manuscript subset | Expand only with compatibility tests |
 | Multi-section templates | The cover, front matter and body each get their own section; a template that changes its setup mid-chapter (landscape, a two-column passage) is still flattened into the part it falls in | Map a part to a page setup the content can name |
 | Document grid | The template snaps text to a 312-twip `w:docGrid`; the writer library emits its own `linePitch="360"` | Write `w:docGrid` in the post-pass |

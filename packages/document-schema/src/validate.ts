@@ -391,6 +391,49 @@ function validateKeywords(value: unknown, path: string, report: Report): void {
   }
 }
 
+/** Block types that may carry formatted spans in addition to `text`. */
+const INLINE_RUN_BLOCKS = [
+  'heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6',
+  'paragraph', 'paragraph_no_indent', 'centered_text', 'list_item', 'blockquote',
+];
+
+const INLINE_RUN_FLAGS = ['bold', 'italic', 'underline', 'strike', 'code'] as const;
+
+/**
+ * Validate the optional `runs` of a block.
+ *
+ * `runs` is what keeps Markdown's inline formatting alive; `text` remains the
+ * flattened fallback, so a document without runs validates exactly as before.
+ */
+function validateInlineRuns(value: Record<string, unknown>, path: string, report: Report): void {
+  const runs = value.runs;
+  if (runs === undefined) return;
+  if (!Array.isArray(runs)) {
+    report(`${path}.runs`, `must be an array of runs, received ${describe(runs)}`);
+    return;
+  }
+  runs.forEach((run, index) => {
+    const runPath = `${path}.runs[${index}]`;
+    if (!isObject(run)) {
+      report(runPath, `expected a run object, received ${describe(run)}`);
+      return;
+    }
+    // A run may be a single space: it separates two formatted spans. Only an
+    // empty string is meaningless.
+    if (typeof run.text !== 'string' || run.text.length === 0) {
+      report(`${runPath}.text`, `a run requires a non-empty string, received ${describe(run.text)}`);
+    }
+    for (const flag of INLINE_RUN_FLAGS) {
+      if (run[flag] !== undefined && typeof run[flag] !== 'boolean') {
+        report(`${runPath}.${flag}`, `must be a boolean, received ${describe(run[flag])}`);
+      }
+    }
+    if (run.href !== undefined && !isNonEmptyString(run.href)) {
+      report(`${runPath}.href`, `must be a non-empty string when given, received ${describe(run.href)}`);
+    }
+  });
+}
+
 function validateBlock(value: unknown, path: string, report: Report): void {
   if (!isObject(value)) {
     report(path, `expected a block object, received ${describe(value)}`);
@@ -408,6 +451,7 @@ function validateBlock(value: unknown, path: string, report: Report): void {
       report(`${path}.${field}`, `${blockType} requires a non-empty string, received ${describe(value[field])}`);
     }
   }
+  if (INLINE_RUN_BLOCKS.includes(blockType)) validateInlineRuns(value, path, report);
 
   switch (blockType) {
     case 'table':
