@@ -24,6 +24,7 @@
 - **Headers/footers/page numbers** — configurable
 - **Three document types** — thesis (学位论文), journal (期刊), official document (公文)
 - **Backward compatible** — supports legacy `{cover_blocks, body_blocks}` JSON format
+- **Statistical symbol formatting** — statistics/parameters in running text and tables are auto-set italic (never bold), vectors/matrices bold italic; see below
 
 ## Install
 
@@ -86,6 +87,17 @@ const buffer = await renderDocument({
 | `spacer` / `page_break` / `horizontal_rule` | Layout |
 
 Equations are emitted as editable native Office Math for the syntax documented in [`@openthesis/equation-engine`](../equation-engine/README.md). Unsupported commands are preserved as readable text where possible.
+
+## Statistical symbols
+
+Paragraphs (plain and formatted spans), list items, blockquotes, journal abstracts, and table captions / headers / cells are scanned for academic symbols, which are then set in Times New Roman:
+
+| Kind | Examples | Format |
+|------|----------|--------|
+| Statistics & population parameters | `t`, `F`, `p`, `P`, `M`, `SD`, `SE`, `Mdn`, `r`, `z`, `d`, `n`, `N`, `df`, `χ²`, `μ` (`\mu`), `σ` (`\sigma`) | italic, not bold |
+| Vectors & matrices | the letter after 向量 / 矩阵 / 矢量, or `\mathbf{A}` / `\vec{x}` | bold italic |
+
+Recognition is context-based and conservative — a symbol is only reformatted when a comparison or assignment follows (`P < 0.001`, `t(12) = 2.31`), when it heads a label (`P 值`, `t 检验`), when it is flanked by CJK text, or when it fills a whole table cell. Letters inside ordinary words are never split, and inline code spans are exempt. The splitter is exported as `splitStatisticalSymbols(text)` for testing and reuse.
 
 ## Related
 

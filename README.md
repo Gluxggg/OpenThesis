@@ -166,6 +166,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 - ✅ **Agent-ready Skill** — Standard `SKILL.md`, executable wrapper, UI metadata, and progressive references
 - ✅ **Native Office Math core** — Fractions, roots, scripts, sums, integrals, symbols, and Greek letters emit OMML
 - ✅ **Advanced native math slice** — Functions, limits, accents, scalable delimiters, binomials, matrices, cases, and aligned equations
+- ✅ **Statistical symbol formatting** — Statistics and population parameters recognised in body text and tables (t, F, p, P, M, SD, r, df, χ², μ, σ…) are set in Times New Roman italic, never bold; vector/matrix symbols are set bold italic
 - ✅ **Conversion diagnostics** — `convertLatexToOmml` reports whether the result is native OMML or a lossy Unicode fallback, and why
 - ✅ **Legacy format support** — Backward compatible with existing `{cover_blocks, body_blocks}` JSON
 - 🚧 **Remaining V3 coverage** — User-defined macros, array column specifications, equation arrays, and less common AMS environments

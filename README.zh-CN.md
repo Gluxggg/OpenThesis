@@ -151,6 +151,7 @@ node .codex/skills/openthesis/scripts/openthesis.mjs build manuscript.md \
 - ✅ 标准 Agent Skill
 - ✅ 分数、根式、上下标、求和、积分、符号和希腊字母的原生 Office Math
 - ✅ 函数、极限、重音、可缩放括号、二项式、矩阵、分段函数和对齐公式
+- ✅ 统计符号自动排版——正文与表格中识别出的统计量、总体参数（t、F、p、P、M、SD、r、df、χ²、μ、σ 等）自动设为 Times New Roman 斜体且不加粗，向量/矩阵符号设为斜体加粗（如表头「P 值」的 P）
 - 🚧 后续 V3：用户宏、数组列规格、公式数组和较少使用的 AMS 环境
 
 ## 技术栈

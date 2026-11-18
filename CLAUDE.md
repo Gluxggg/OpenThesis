@@ -45,6 +45,9 @@ Style roles are detected by regex matching on style names plus outline level fal
 ### 5. Official Document Support (V1)
 Complete block types for Chinese official documents: `red_header`, `document_number`, `recipient_line`, `signature_block`, `attachment_note`.
 
+### 6. Statistical Symbol Formatting
+Plain and formatted running text is scanned by `docx-renderer/src/statistical-symbols.ts` (hooked into `styledRuns`/`inlineRunChildren`): statistics and population parameters (t, F, p, M, SD, r, df, χ², Greek via `\mu`/`\sigma` or Unicode) render in Times New Roman italic, never bold; vector/matrix symbols (after 向量/矩阵/矢量, or `\mathbf{}`/`\vec{}`) render bold italic. Detection is context-gated so ordinary prose is untouched.
+
 ## Commands
 
 ```bash

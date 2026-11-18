@@ -25,6 +25,10 @@ import type {
 } from 'docx';
 import { formatReference } from './references.js';
 import { validateJournalRequirements } from './requirements.js';
+import { splitStatisticalSymbols, type TextSegmentKind } from './statistical-symbols.js';
+
+export { splitStatisticalSymbols } from './statistical-symbols.js';
+export type { TextSegment, TextSegmentKind } from './statistical-symbols.js';
 import { validateDocument } from '@openthesis/document-schema';
 import type { Reference, ThesisMeta } from '@openthesis/document-schema';
 import type {
@@ -881,6 +885,40 @@ function styledRun(
 }
 
 /**
+ * Build runs from plain text, applying the academic symbol convention
+ * recognised by `splitStatisticalSymbols` (see statistical-symbols.ts):
+ * statistics and population parameters come out in Times New Roman italic
+ * and never bold — including inside a bold table header, where the `P` of
+ * `P 值` is the whole point — and vector/matrix symbols come out bold italic.
+ * Ordinary segments keep the resolved style exactly as `styledRun` made them.
+ */
+function styledSymbolRuns(
+  text: string,
+  style: ParagraphStyle,
+  forceBold?: boolean,
+  customSize?: number,
+): TextRun[] {
+  return splitStatisticalSymbols(text).map(segment => {
+    if (segment.kind === 'plain') {
+      return styledRun(segment.text, style, forceBold, customSize);
+    }
+    return new TextRun({
+      text: segment.text,
+      bold: segment.kind === 'vector',
+      italics: true,
+      color: style.font.color,
+      size: customSize ?? style.font.size,
+      font: {
+        ascii: 'Times New Roman',
+        hAnsi: 'Times New Roman',
+        eastAsia: style.font.eastAsia,
+        cs: 'Times New Roman',
+      },
+    });
+  });
+}
+
+/**
  * Build a paragraph's children from its formatted spans.
  *
  * A span may still carry an inline equation or a cross-reference; those go
@@ -908,24 +946,33 @@ function inlineRunChildren(
       children.push(...styledRuns(run.text, style, bold, customSize));
       continue;
     }
-    const textRun = new TextRun({
-      text: run.text,
-      bold: bold ?? style.font.bold,
-      italics: run.italic ?? style.font.italic,
+    // Inline code keeps its monospace face and is never re-read as symbols;
+    // every other span goes through the same symbol recognition as plain
+    // text, with the span's own emphasis as the base the symbols override.
+    const latinFace = run.code ? 'Courier New' : style.font.name;
+    const buildTextRun = (text: string, kind: TextSegmentKind): TextRun => new TextRun({
+      text,
+      bold: kind === 'statistic' ? false : kind === 'vector' ? true : bold ?? style.font.bold,
+      italics: kind === 'plain' ? run.italic ?? style.font.italic : true,
       color: style.font.color,
       size: customSize ?? style.font.size,
       strike: run.strike,
       ...(run.underline ? { underline: {} } : {}),
       font: {
-        ascii: run.code ? 'Courier New' : style.font.name,
-        hAnsi: run.code ? 'Courier New' : style.font.name,
+        ascii: kind === 'plain' ? latinFace : 'Times New Roman',
+        hAnsi: kind === 'plain' ? latinFace : 'Times New Roman',
         eastAsia: style.font.eastAsia,
-        cs: run.code ? 'Courier New' : style.font.name,
+        cs: kind === 'plain' ? latinFace : 'Times New Roman',
       },
     });
-    children.push(run.href
-      ? new ExternalHyperlink({ link: run.href, children: [textRun] })
-      : textRun);
+    const textRuns = run.code
+      ? [buildTextRun(run.text, 'plain')]
+      : splitStatisticalSymbols(run.text).map(segment => buildTextRun(segment.text, segment.kind));
+    if (run.href) {
+      children.push(new ExternalHyperlink({ link: run.href, children: textRuns }));
+    } else {
+      children.push(...textRuns);
+    }
   }
   return children;
 }
@@ -945,7 +992,7 @@ function styledRuns(
   const hasRef = CROSS_REF.test(text);
   CROSS_REF.lastIndex = 0;
   if (!hasMath && !hasRef) {
-    return [styledRun(text, style, forceBold, customSize)];
+    return styledSymbolRuns(text, style, forceBold, customSize);
   }
 
   // One pass, cutting at whichever marker comes first: an inline `$…$` equation
@@ -962,7 +1009,7 @@ function styledRuns(
 
   while ((match = pattern.exec(text)) !== null) {
     if (match.index > lastIndex) {
-      runs.push(styledRun(text.slice(lastIndex, match.index), style, forceBold, customSize));
+      runs.push(...styledSymbolRuns(text.slice(lastIndex, match.index), style, forceBold, customSize));
     }
 
     if (match[2] === '引用') {
@@ -985,10 +1032,10 @@ function styledRuns(
   }
 
   if (lastIndex < text.length) {
-    runs.push(styledRun(text.slice(lastIndex), style, forceBold, customSize));
+    runs.push(...styledSymbolRuns(text.slice(lastIndex), style, forceBold, customSize));
   }
 
-  return runs.length > 0 ? runs : [styledRun(text, style, forceBold, customSize)];
+  return runs.length > 0 ? runs : styledSymbolRuns(text, style, forceBold, customSize);
 }
 
 /**

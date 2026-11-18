@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createUSTBTemplate, renderDocument } from '../packages/docx-renderer/dist/index.js';
+import { createUSTBTemplate, renderDocument, splitStatisticalSymbols } from '../packages/docx-renderer/dist/index.js';
 import { parseTemplate } from '../packages/template-parser/dist/index.js';
 
 /** The instruction text of every complex field in the document. */
@@ -2830,4 +2830,123 @@ test('a table on a two-column page is sized to the column, not the page', async 
   const printable = twoColumn.page.width - twoColumn.page.margins.left - twoColumn.page.margins.right;
   const column = Math.floor((printable - twoColumn.page.columnGutter) / 2);
   assert.ok(tableWidth <= column, `the table (${tableWidth}) must fit one column (${column})`);
+});
+
+function statRunsOf(xml) {
+  return [...xml.matchAll(/<w:r>([\s\S]*?)<\/w:r>/g)].map(match => {
+    const inner = match[1];
+    return {
+      text: [...inner.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map(part => part[1]).join(''),
+      italic: /<w:i\/>|<w:i\s/.test(inner),
+      bold: /<w:b\/>/.test(inner),
+      boldOff: /<w:b w:val="false"\/>/.test(inner),
+    };
+  });
+}
+
+test('splits statistical symbols out of running text conservatively', () => {
+  assert.deepEqual(splitStatisticalSymbols('P 值'), [
+    { text: 'P', kind: 'statistic' },
+    { text: ' 值', kind: 'plain' },
+  ]);
+  assert.deepEqual(splitStatisticalSymbols('p < 0.05'), [
+    { text: 'p', kind: 'statistic' },
+    { text: ' < 0.05', kind: 'plain' },
+  ]);
+  // Letters inside ordinary words and compound nouns stay plain.
+  assert.deepEqual(splitStatisticalSymbols('The plan was practical.'), [
+    { text: 'The plan was practical.', kind: 'plain' },
+  ]);
+  assert.deepEqual(splitStatisticalSymbols('M码与SD卡'), [
+    { text: 'M码与SD卡', kind: 'plain' },
+  ]);
+  assert.deepEqual(splitStatisticalSymbols('矩阵A'), [
+    { text: '矩阵', kind: 'plain' },
+    { text: 'A', kind: 'vector' },
+  ]);
+});
+
+test('italicises statistical symbols in body paragraphs, never bold', async () => {
+  const buffer = await renderDocument({
+    outputPath: '', template,
+    document: {
+      type: 'thesis', meta: { title: 'Statistics' }, cover: [],
+      sections: [{
+        id: 'stats', type: 'chapter', title: '结果',
+        content: [
+          { type: 'paragraph', text: '两组差异显著（P < 0.001），t(12) = 2.31，M = 3.20，SD = 1.10，r = 0.45。' },
+          { type: 'paragraph', text: 'The plan was practical and the approach worked well.' },
+        ],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const runs = statRunsOf(xml);
+  for (const symbol of ['P', 't', 'M', 'SD', 'r']) {
+    const run = runs.find(candidate => candidate.text === symbol);
+    assert.ok(run, `expected a dedicated run for ${symbol}`);
+    assert.equal(run.italic, true, `${symbol} should be italic`);
+    assert.equal(run.boldOff, true, `${symbol} should explicitly not be bold`);
+  }
+  const prose = runs.find(candidate => candidate.text.includes('practical'));
+  assert.equal(prose.text, 'The plan was practical and the approach worked well.');
+  assert.equal(prose.italic, false);
+});
+
+test('renders the P of a "P 值" table header italic while the label stays bold', async () => {
+  const buffer = await renderDocument({
+    outputPath: '', template,
+    document: {
+      type: 'thesis', meta: { title: 'Table statistics' }, cover: [],
+      sections: [{
+        id: 'table', type: 'chapter', title: '表',
+        content: [{ type: 'table', caption: '检验结果', headers: ['指标', 'P 值'], data: [['甲', '0.997']] }],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  const runs = statRunsOf(xml);
+  const pRun = runs.find(candidate => candidate.text === 'P');
+  assert.ok(pRun, 'expected a dedicated run for the header P');
+  assert.equal(pRun.italic, true);
+  assert.equal(pRun.boldOff, true);
+  const labelRun = runs.find(candidate => candidate.text === ' 值');
+  assert.ok(labelRun, 'expected the 值 label to remain its own run');
+  assert.equal(labelRun.bold, true);
+  assert.equal(labelRun.italic, false);
+});
+
+test('converts LaTeX Greek parameters and renders vectors bold italic', async () => {
+  const buffer = await renderDocument({
+    outputPath: '', template,
+    document: {
+      type: 'thesis', meta: { title: 'Greek and vectors' }, cover: [],
+      sections: [{
+        id: 'greek', type: 'chapter', title: '参数',
+        content: [
+          { type: 'paragraph', text: '总体参数\\mu与\\sigma满足约束，\\chi^2 = 5.99，矩阵A与\\mathbf{B}给定。' },
+          { type: 'paragraph', text: '占位段落', runs: [{ text: '复核后 P < 0.05 仍成立' }] },
+        ],
+      }],
+    },
+  });
+  const { xml } = await documentXml(buffer);
+  assert.doesNotMatch(xml, /\\mu|\\sigma|\\chi|\\mathbf/);
+  const runs = statRunsOf(xml);
+  for (const symbol of ['μ', 'σ', 'χ²']) {
+    const run = runs.find(candidate => candidate.text === symbol);
+    assert.ok(run, `expected a dedicated run for ${symbol}`);
+    assert.equal(run.italic, true, `${symbol} should be italic`);
+    assert.equal(run.boldOff, true, `${symbol} should not be bold`);
+  }
+  for (const symbol of ['A', 'B']) {
+    const run = runs.find(candidate => candidate.text === symbol);
+    assert.ok(run, `expected a dedicated run for vector ${symbol}`);
+    assert.equal(run.italic, true, `vector ${symbol} should be italic`);
+    assert.equal(run.bold, true, `vector ${symbol} should be bold`);
+  }
+  // The formatted-spans path (block.runs) applies the same recognition.
+  const pRuns = runs.filter(candidate => candidate.text === 'P');
+  assert.ok(pRuns.length >= 1 && pRuns.every(candidate => candidate.italic && candidate.boldOff),
+    'expected every standalone P run to be italic and not bold');
 });
