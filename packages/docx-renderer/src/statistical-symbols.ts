@@ -4,9 +4,9 @@
 // Academic manuscripts follow a strict convention for symbols:
 //
 //   - Statistics and population parameters — t, F, p, P, M, SD,
-//     SE, Mdn, r, z, d, n, N, df, χ², and Greek parameters such
-//     as μ (\mu) and σ (\sigma) — are set in Times New Roman
-//     italic, never bold.
+//     SE, Mdn, r, z, d, n, N, df, R², χ², g, H, CI, OR, and Greek
+//     parameters such as μ (\mu) and σ (\sigma) — are set in
+//     Times New Roman italic, never bold.
 //   - Vector and matrix symbols are set in Times New Roman
 //     bold italic.
 //
@@ -49,6 +49,7 @@ const SUPERSCRIPT_DIGITS: Record<string, string> = {
 /** Symbols recognised when a comparison / assignment follows. */
 const COMPARISON_SYMBOLS = new Set([
   't', 'F', 'p', 'P', 'r', 'z', 'd', 'M', 'N', 'n', 'U', 'W',
+  'R', 'g', 'H',
 ]);
 
 /** Symbols recognised when followed by 值 (e.g. the header "P 值"). */
@@ -65,7 +66,7 @@ const TEST_LABEL_SYMBOLS = new Set(['t', 'F', 'z', 'U']);
 const CJK_FLANKED_SYMBOLS = new Set(['t', 'F', 'p', 'P', 'r', 'n', 'N']);
 
 /** Multi-letter statistics, recognised as standalone tokens. */
-const MULTI_LETTER_SYMBOLS = ['Mdn', 'SD', 'SE', 'df'];
+const MULTI_LETTER_SYMBOLS = ['Mdn', 'SD', 'SE', 'df', 'CI', 'OR'];
 
 /** Words after which a single letter denotes a vector / matrix. */
 const VECTOR_KEYWORDS = ['向量', '矩阵', '矢量'];
@@ -141,6 +142,33 @@ function matchLatexGreek(text: string, index: number): Match | null {
   return { consumed, display, kind: 'statistic' };
 }
 
+/**
+ * Squared statistics typed without a real superscript: `χ2`, `R2`,
+ * `R^2`, `R²`. The trailing context must still look statistical,
+ * so names like `R2D2` are left alone.
+ */
+function matchSquaredSymbol(text: string, index: number): Match | null {
+  const ch = text[index];
+  if (ch !== 'χ' && ch !== 'R') return null;
+  if (isAsciiAlnum(text[index - 1]) || text[index - 1] === '_') return null;
+  const rest = text.slice(index + 1);
+  const superscript = /^²|^\^\{(\d)\}|^\^(\d)/.exec(rest);
+  if (superscript) {
+    const digit = superscript[1] ?? superscript[2] ?? '2';
+    if (digit !== '2') return null;
+    return { consumed: 1 + superscript[0].length, display: `${ch}²`, kind: 'statistic' };
+  }
+  if (rest.startsWith('2')) {
+    const after = text[index + 2];
+    if (after === undefined || after === ' '
+      || '=<>≤≥≈＝＜＞，；：检分值'.includes(after)
+      || text.startsWith('为', index + 2)) {
+      return { consumed: 2, display: `${ch}²`, kind: 'statistic' };
+    }
+  }
+  return null;
+}
+
 function matchGreekChar(text: string, index: number): Match | null {
   const ch = text[index];
   if (!GREEK_CHARS.has(ch)) return null;
@@ -177,6 +205,8 @@ function matchMultiLetter(text: string, index: number): Match | null {
     if (!text.startsWith(symbol, index)) continue;
     const next = text[index + symbol.length];
     if (isAsciiAlnum(next)) continue;
+    // "CI/CD" and similar slashed compounds are names, not statistics.
+    if (next === '/') continue;
     // Followed directly by a CJK noun it is more likely a compound
     // word ("SD卡") than a statistic ("SD为…", "SD的值", "SD，…").
     if (isCjk(next) && !'为是的值'.includes(next)) continue;
@@ -194,8 +224,10 @@ function matchSingleLetter(text: string, index: number): Match | null {
   const statistic: Match = { consumed: 1, display: ch, kind: 'statistic' };
 
   // Strong context: t(12) = …, F(1, 23) = …, p < 0.05, M = 3.20 …
+  // Fullwidth operators and parentheses （）＝＜＞ count too: Chinese
+  // manuscripts mix them freely with the halfwidth forms.
   if (COMPARISON_SYMBOLS.has(ch)
-    && /^(\(\s*[\d\s,.]+\s*\))?\s*(=|<|>|≤|≥|≈|~)/.test(rest)) {
+    && /^([\(（]\s*[\d\s,.]+\s*[\)）])?\s*(=|<|>|≤|≥|≈|~|＝|＜|＞)/.test(rest)) {
     return statistic;
   }
   // Label context: "P 值", "P值", "t 值" (table headers, captions).
@@ -222,6 +254,7 @@ function matchAt(text: string, index: number): Match | null {
     return matchExplicitVector(text, index) ?? matchLatexGreek(text, index);
   }
   return matchVectorKeyword(text, index)
+    ?? matchSquaredSymbol(text, index)
     ?? matchGreekChar(text, index)
     ?? matchMultiLetter(text, index)
     ?? matchSingleLetter(text, index);

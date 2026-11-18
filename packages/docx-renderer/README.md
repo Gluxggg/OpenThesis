@@ -94,10 +94,10 @@ Paragraphs (plain and formatted spans), list items, blockquotes, journal abstrac
 
 | Kind | Examples | Format |
 |------|----------|--------|
-| Statistics & population parameters | `t`, `F`, `p`, `P`, `M`, `SD`, `SE`, `Mdn`, `r`, `z`, `d`, `n`, `N`, `df`, `χ²`, `μ` (`\mu`), `σ` (`\sigma`) | italic, not bold |
+| Statistics & population parameters | `t`, `F`, `p`, `P`, `M`, `SD`, `SE`, `Mdn`, `r`, `z`, `d`, `g`, `n`, `N`, `df`, `R²`, `χ²`, `H`, `U`, `W`, `CI`, `OR`, `μ` (`\mu`), `σ` (`\sigma`) | italic, not bold |
 | Vectors & matrices | the letter after 向量 / 矩阵 / 矢量, or `\mathbf{A}` / `\vec{x}` | bold italic |
 
-Recognition is context-based and conservative — a symbol is only reformatted when a comparison or assignment follows (`P < 0.001`, `t(12) = 2.31`), when it heads a label (`P 值`, `t 检验`), when it is flanked by CJK text, or when it fills a whole table cell. Letters inside ordinary words are never split, and inline code spans are exempt. The splitter is exported as `splitStatisticalSymbols(text)` for testing and reuse.
+Recognition is context-based and conservative — a symbol is only reformatted when a comparison or assignment follows (`P < 0.001`, `t(12) = 2.31`), when it heads a label (`P 值`, `t 检验`), when it is flanked by CJK text, or when it fills a whole table cell. Letters inside ordinary words are never split, and inline code spans are exempt. Fullwidth operators and parentheses (`P＜0.001`, `t（12）＝2.31`) count as their halfwidth forms, and squared statistics typed without a superscript (`χ2检验`, `R2为0.85`, `R^2 = 0.85`) are normalised to `χ²` / `R²`. The splitter is exported as `splitStatisticalSymbols(text)`, and `tests/statistical-symbols.test.mjs` locks the recognised and rejected cases as a regression suite.
 
 ## Related
 
